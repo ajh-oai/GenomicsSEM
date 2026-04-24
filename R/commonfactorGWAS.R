@@ -125,52 +125,63 @@ output from ldsc (using covstruc = ...)  followed by the output from sumstats (u
   ##pull the coordinates of the I_LD matrix to loop making the V_SNP matrix
   coords <- which(I_LD != 'NA', arr.ind= T)
 
-  ##run one model that specifies the factor structure so that lavaan knows how to rearrange the V (i.e., sampling covariance) matrix
-  for (i in 1) {
-    V_SNP <- .get_V_SNP(SE_SNP, I_LD, varSNP, "conserv", coords, k, i)
+  use_fast_commonfactor <- estimation == "DWLS" && isTRUE(getOption("GenomicSEM.fast_commonfactor_fit", FALSE))
 
-    ##create shell of full sampling covariance matrix
-    V_Full <- .get_V_full(k, V_LD, varSNPSE2, V_SNP)
+  if(use_fast_commonfactor){
+    order <- seq_len((k + 1L) * (k + 2L) / 2L)
+    LavModel1 <- NULL
+    fast_fit_start <- .commonfactor_fast_start_from_cov(S_LD)
+  } else {
+    ##run one model that specifies the factor structure so that lavaan knows how to rearrange the V (i.e., sampling covariance) matrix
+    for (i in 1) {
+      V_SNP <- .get_V_SNP(SE_SNP, I_LD, varSNP, "conserv", coords, k, i)
 
-    k2 <- nrow(V_Full)
-    smooth2 <- ifelse(eigen(V_Full)$values[k2] <= 0, V_Full<-as.matrix((nearPD(V_Full, corr = FALSE))$mat), V_Full<-V_Full)
+      ##create shell of full sampling covariance matrix
+      V_Full <- .get_V_full(k, V_LD, varSNPSE2, V_SNP)
 
-    W <- solve(V_Full,tol=toler)
+      k2 <- nrow(V_Full)
+      smooth2 <- ifelse(eigen(V_Full)$values[k2] <= 0, V_Full<-as.matrix((nearPD(V_Full, corr = FALSE))$mat), V_Full<-V_Full)
 
-    #create empty vector for S_SNP
-    S_SNP <- vector(mode="numeric",length=k+1)
+      W <- solve(V_Full,tol=toler)
 
-    #enter SNP variance from reference panel as first observation
-    S_SNP[1] <- varSNP[i]
+      #create empty vector for S_SNP
+      S_SNP <- vector(mode="numeric",length=k+1)
 
-    #enter SNP covariances (standardized beta * SNP variance from refference panel)
-    for (p in 1:k) {
-      S_SNP[p+1] <- varSNP[i]*beta_SNP[i,p]
+      #enter SNP variance from reference panel as first observation
+      S_SNP[1] <- varSNP[i]
+
+      #enter SNP covariances (standardized beta * SNP variance from refference panel)
+      for (p in 1:k) {
+        S_SNP[p+1] <- varSNP[i]*beta_SNP[i,p]
+      }
+
+      #create shell of the full S (observed covariance) matrix
+      S_Fullrun <- diag(k+1)
+
+      ##add the LD portion of the S matrix
+      S_Fullrun[(2:(k+1)),(2:(k+1))] <- S_LD
+
+      ##add in observed SNP variances as first row/column
+      S_Fullrun[1:(k+1),1] <- S_SNP
+      S_Fullrun[1,1:(k+1)] <- t(S_SNP)
+
+      ##pull in variables names specified in the munge function and name first column as SNP
+      colnames(S_Fullrun) <- c("SNP", colnames(S_LD))
+
+      ##name rows like columns
+      rownames(S_Fullrun) <- colnames(S_Fullrun)
+
+      ##smooth to near positive definite if either V or S are non-positive definite
+      ks <- nrow(S_Fullrun)
+      smooth1 <- ifelse(eigen(S_Fullrun)$values[ks] <= 0, S_Fullrun<-as.matrix((nearPD(S_Fullrun, corr = FALSE))$mat), S_Fullrun<-S_Fullrun)
+
+      suppress <- .tryCatch.W.E(ReorderModel <- sem(Model1, sample.cov = S_Fullrun, estimator = "DWLS",se="standard", WLS.V = W, sample.nobs = 2, optim.dx.tol = .01,optim.force.converged=TRUE,control=list(iter.max=1)))
+
+      order <- .rearrange(k = k+1, fit = ReorderModel, names = rownames(S_Fullrun))
     }
 
-    #create shell of the full S (observed covariance) matrix
-    S_Fullrun <- diag(k+1)
-
-    ##add the LD portion of the S matrix
-    S_Fullrun[(2:(k+1)),(2:(k+1))] <- S_LD
-
-    ##add in observed SNP variances as first row/column
-    S_Fullrun[1:(k+1),1] <- S_SNP
-    S_Fullrun[1,1:(k+1)] <- t(S_SNP)
-
-    ##pull in variables names specified in LDSC function and name first column as SNP
-    colnames(S_Fullrun) <- c("SNP", colnames(S_LD))
-
-    ##name rows like columns
-    rownames(S_Fullrun) <- colnames(S_Fullrun)
-
-    ##smooth to near positive definite if either V or S are non-positive definite
-    ks <- nrow(S_Fullrun)
-    smooth1 <- ifelse(eigen(S_Fullrun)$values[ks] <= 0, S_Fullrun<-as.matrix((nearPD(S_Fullrun, corr = FALSE))$mat), S_Fullrun<-S_Fullrun)
-
-    suppress <- .tryCatch.W.E(ReorderModel <- sem(Model1, sample.cov = S_Fullrun, estimator = "DWLS",se="standard", WLS.V = W, sample.nobs = 2, optim.dx.tol = .01,optim.force.converged=TRUE,control=list(iter.max=1)))
-
-    order <- .rearrange(k = k+1, fit = ReorderModel, names = rownames(S_Fullrun))
+    LavModel1 <- .commonfactorGWAS_main(1, cores=1, 1, S_LD, V_LD, I_LD, beta_SNP, SE_SNP, varSNP, varSNPSE2, GC, coords, k, smooth_check,Model1, toler, estimation, order,returnlavmodel=TRUE)
+    fast_fit_start <- .commonfactor_fast_start(LavModel1, k)
   }
 
   if(TWAS){
@@ -186,8 +197,6 @@ output from ldsc (using covstruc = ...)  followed by the output from sumstats (u
   } else {
     colnamesresults <- c("i", "lhs", "op", "rhs", "est", "se", "se_c", "Q", "fail", "warning")
   }
-  LavModel1 <- .commonfactorGWAS_main(1, cores=1, 1, S_LD, V_LD, I_LD, beta_SNP, SE_SNP, varSNP, varSNPSE2, GC, coords, k, smooth_check,Model1, toler, estimation, order,returnlavmodel=TRUE)
-  fast_fit_start <- .commonfactor_fast_start(LavModel1, k)
   if(!parallel){
     if(smooth_check){
       results <- as.data.frame(matrix(NA, ncol=11, nrow=f))

@@ -356,6 +356,39 @@ return(S_Full)
   start
 }
 
+.commonfactor_fast_start_from_cov <- function(S_LD) {
+  S_LD <- as.matrix(S_LD)
+  k <- ncol(S_LD)
+  if (k < 1L || nrow(S_LD) != k) {
+    return(NULL)
+  }
+
+  eig <- tryCatch(eigen(S_LD, symmetric = TRUE), error = function(e) NULL)
+  if (is.null(eig) || !all(is.finite(eig$values)) || !all(is.finite(eig$vectors))) {
+    return(NULL)
+  }
+
+  v <- eig$vectors[, 1L]
+  if (abs(v[1L]) < sqrt(.Machine$double.eps)) {
+    v[1L] <- ifelse(v[1L] < 0, -sqrt(.Machine$double.eps), sqrt(.Machine$double.eps))
+  }
+
+  lambdas <- v / v[1L]
+  psi <- max(eig$values[1L] * v[1L]^2, sqrt(.Machine$double.eps))
+  theta <- diag(S_LD) - lambdas^2 * psi
+  theta[!is.finite(theta) | theta <= 0] <- sqrt(.Machine$double.eps)
+
+  start <- numeric(2 * k + 2L)
+  if (k > 1L) {
+    start[seq_len(k - 1L)] <- lambdas[2:k]
+  }
+  start[k] <- 0
+  start[k + seq_len(k)] <- theta
+  start[2L * k + 1L] <- psi
+  start[2L * k + 2L] <- 1
+  start
+}
+
 .commonfactor_fit_fast <- function(S_Fullrun, V_Full_Reorder, W_diag, start, k, max_iter = 100L, tol = 1e-10) {
   if (!.genomicssem_use_rust() || is.null(start)) {
     return(NULL)

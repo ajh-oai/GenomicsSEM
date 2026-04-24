@@ -404,3 +404,40 @@ Interpretation:
 
 - The Q-enabled workflow now gets the same kind of high-impact improvement as `Q_SNP=FALSE`: `27.700s -> 1.170s` single-core and `7.407s -> 0.545s` on 4 cores for the Rust-backed path.
 - This remains an opt-in numerical replacement, not byte-identical lavaan output. The tested synthetic workflow matches the reference to sub-micro Q differences.
+
+## 2026-04-24 01:20 PDT - Remove commonfactorGWAS fast-path startup lavaan
+
+Change set:
+
+- The `commonfactorGWAS()` Rust fast path no longer runs lavaan before the SNP loop.
+- Vech ordering for the generated SNP-plus-one-factor model is identity, so the fast path now uses `seq_len((k + 1) * (k + 2) / 2)`.
+- Added `.commonfactor_fast_start_from_cov()`, which derives fixed startup values from the first eigenvector of the LDSC genetic covariance matrix.
+- Slow/fallback paths still keep the original lavaan setup and lavaan fallback behavior.
+
+Validation:
+
+```sh
+R CMD INSTALL --install-tests .
+Rscript tests/commonfactor-fast-fit.R
+Rscript tests/commonfactor-qsnp.R
+```
+
+Benchmark command:
+
+```sh
+Rscript benches/bench_usergwas_synthetic.R 100 12 1,4 commonfactorGWAS 1 TRUE FALSE TRUE TRUE TRUE
+```
+
+Results:
+
+| backend | cores | Q_SNP | fast_commonfactor_fit | elapsed_sec | checksum |
+|---|---:|---|---|---:|---:|
+| old_r_workflow | 1 | TRUE | TRUE | 29.070 | 11616.85 |
+| old_r_workflow | 4 | TRUE | TRUE | 7.647 | 11616.85 |
+| rust_binding_workflow | 1 | TRUE | TRUE | 0.916 | 11616.85 |
+| rust_binding_workflow | 4 | TRUE | TRUE | 0.318 | 11616.85 |
+
+Interpretation:
+
+- Removing startup lavaan reduced the Rust-backed `Q_SNP=TRUE` benchmark from `1.170s -> 0.916s` single-core and `0.545s -> 0.318s` on 4 cores.
+- This mostly removes fixed overhead, so its relative impact is largest for smaller SNP batches and interactive checks.
