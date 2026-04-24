@@ -524,4 +524,44 @@ Results:
 Interpretation:
 
 - This removes the dominant per-SNP lavaan cost for supported `userGWAS()` DWLS models: `10.406s -> 0.758s` single-core with `Q_SNP=FALSE`, and `9.894s -> 0.789s` with `Q_SNP=TRUE` on this benchmark.
-- The current implementation still uses lavaan once up front to build the parameter table. Removing that remaining setup dependency would require parsing lavaan syntax and reproducing lavaan parameter-table defaults directly.
+- This checkpoint still used lavaan once up front to build the optimized first-SNP basemodel; the next checkpoint removes that pre-loop fit from the fast path.
+
+## 2026-04-24 01:45 PDT - Remove userGWAS fast-path basemodel lavaan fit
+
+Change set:
+
+- The `userGWAS()` Rust fast path no longer runs the extra first-SNP lavaan fit to obtain a basemodel.
+- It compiles the setup `ReorderModel` parameter table directly into the Rust RAM solver.
+- `.sem_fit_fast()` now reorders `S_Fullrun` to the compiled observed-variable order before entering Rust.
+- Slow/fallback paths still keep the original lavaan behavior.
+
+Validation:
+
+```sh
+R CMD INSTALL --install-tests .
+Rscript tests/usergwas-fast-fit.R
+```
+
+Benchmark command:
+
+```sh
+Rscript benches/bench_usergwas_synthetic.R 100 12 1,4 userGWAS 1 TRUE FALSE TRUE TRUE FALSE FALSE,TRUE
+```
+
+Results:
+
+| backend | cores | Q_SNP | fast_usergwas_fit | elapsed_sec | checksum |
+|---|---:|---|---|---:|---:|
+| old_r_workflow | 1 | TRUE | FALSE | 10.173 | 824321.7 |
+| old_r_workflow | 4 | TRUE | FALSE | 2.980 | 824321.7 |
+| rust_binding_workflow | 1 | TRUE | FALSE | 9.898 | 824321.7 |
+| rust_binding_workflow | 4 | TRUE | FALSE | 2.844 | 824321.7 |
+| old_r_workflow | 1 | TRUE | TRUE | 11.317 | 824321.7 |
+| old_r_workflow | 4 | TRUE | TRUE | 3.141 | 824321.7 |
+| rust_binding_workflow | 1 | TRUE | TRUE | 0.762 | 824321.7 |
+| rust_binding_workflow | 4 | TRUE | TRUE | 0.366 | 824321.7 |
+
+Interpretation:
+
+- Removing the pre-loop basemodel lavaan fit mostly helps the parallel benchmark: `0.503s -> 0.366s` on 4 cores for `Q_SNP=TRUE`.
+- The setup path still calls lavaan to create the initial parameter table and variable ordering. Removing that final dependency would require a lavaan-syntax parser/parameter-table generator rather than a solver replacement.

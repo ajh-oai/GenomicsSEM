@@ -565,6 +565,8 @@ return(S_Full)
     return(NULL)
   }
 
+  S_Fullrun <- as.matrix(S_Fullrun)[spec$observed_names, spec$observed_names, drop = FALSE]
+
   out <- tryCatch(
     .Call(
       "genomicssem_fit_generic_sem_call",

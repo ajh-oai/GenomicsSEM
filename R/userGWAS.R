@@ -235,12 +235,15 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
   }
   
   f <- nrow(beta_SNP)
-  # Run a single SNP to obtain base Lavaan model object
-  LavModel1 <- .userGWAS_main(i=1, cores=1, n_phenotypes, n=1, I_LD, V_LD, S_LD, std.lv, varSNPSE2, order, SNPs, beta_SNP, SE_SNP, varSNP, GC,
-                              coords, smooth_check, TWAS, printwarn, toler, estimation, sub, Model1, df, npar, returnlavmodel=TRUE,Q_SNP=Q_SNP,model=model)
+  use_fast_usergwas <- estimation == "DWLS" && isTRUE(getOption("GenomicSEM.fast_usergwas_fit", FALSE))
+  LavModel1 <- NULL
   fast_fit_spec <- NULL
-  if(estimation == "DWLS" && isTRUE(getOption("GenomicSEM.fast_usergwas_fit", FALSE))){
-    fast_fit_spec <- .sem_fast_compile(parTable(LavModel1), rownames(inspect(LavModel1)[[1]]))
+  if(use_fast_usergwas){
+    fast_fit_spec <- .sem_fast_compile(parTable(ReorderModel), rownames(inspect(ReorderModel)[[1]]))
+  }else{
+    # Run a single SNP to obtain base Lavaan model object
+    LavModel1 <- .userGWAS_main(i=1, cores=1, n_phenotypes, n=1, I_LD, V_LD, S_LD, std.lv, varSNPSE2, order, SNPs, beta_SNP, SE_SNP, varSNP, GC,
+                                coords, smooth_check, TWAS, printwarn, toler, estimation, sub, Model1, df, npar, returnlavmodel=TRUE,Q_SNP=Q_SNP,model=model)
   }
   if(!parallel){
     #make empty list object for model results if not saving specific model parameter
