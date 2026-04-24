@@ -1,0 +1,119 @@
+#ifndef GENOMICSSEM_NATIVE_H
+#define GENOMICSSEM_NATIVE_H
+
+#include <stddef.h>
+
+int genomicssem_fill_v_snp(
+    const double *se_snp,
+    size_t se_nrow,
+    size_t se_ncol,
+    size_t i_zero,
+    const double *i_ld,
+    size_t i_ld_nrow,
+    size_t i_ld_ncol,
+    const double *var_snp,
+    size_t var_snp_len,
+    const int *coords,
+    size_t coords_nrow,
+    size_t coords_ncol,
+    size_t k,
+    int gc_code,
+    double *out,
+    size_t out_len);
+
+int genomicssem_fill_v_full(
+    size_t k,
+    const double *v_ld,
+    size_t v_ld_nrow,
+    size_t v_ld_ncol,
+    double var_snp_se2,
+    const double *v_snp,
+    size_t v_snp_nrow,
+    size_t v_snp_ncol,
+    double *out,
+    size_t out_len);
+
+int genomicssem_fill_v_snp_batch(
+    const double *se_snp,
+    size_t se_nrow,
+    size_t se_ncol,
+    const double *i_ld,
+    size_t i_ld_nrow,
+    size_t i_ld_ncol,
+    const double *var_snp,
+    size_t var_snp_len,
+    const int *coords,
+    size_t coords_nrow,
+    size_t coords_ncol,
+    size_t k,
+    int gc_code,
+    size_t n_threads,
+    double *out,
+    size_t out_len);
+
+int genomicssem_fill_s_full(
+    size_t k,
+    const double *s_ld,
+    size_t s_ld_nrow,
+    size_t s_ld_ncol,
+    const double *var_snp,
+    size_t var_snp_len,
+    const double *beta_snp,
+    size_t beta_nrow,
+    size_t beta_ncol,
+    size_t i_zero,
+    double *out,
+    size_t out_len);
+
+int genomicssem_fill_z_pre(
+    const double *beta_snp,
+    size_t beta_nrow,
+    size_t beta_ncol,
+    const double *se_snp,
+    size_t se_nrow,
+    size_t se_ncol,
+    const double *i_ld,
+    size_t i_ld_nrow,
+    size_t i_ld_ncol,
+    size_t i_zero,
+    int gc_code,
+    double *out,
+    size_t out_len);
+
+int genomicssem_fit_commonfactor_main(
+    size_t k,
+    const double *s_full,
+    size_t s_nrow,
+    size_t s_ncol,
+    const double *v_full_reorder,
+    size_t v_nrow,
+    size_t v_ncol,
+    const double *w_diag,
+    size_t w_len,
+    const double *start,
+    size_t start_len,
+    size_t max_iter,
+    double tol,
+    double *out,
+    size_t out_len);
+
+int genomicssem_fit_commonfactor_q(
+    size_t k,
+    const double *s_full,
+    size_t s_nrow,
+    size_t s_ncol,
+    const double *v_full_reorder,
+    size_t v_nrow,
+    size_t v_ncol,
+    const double *w_diag,
+    size_t w_len,
+    const double *fixed,
+    size_t fixed_len,
+    const double *start,
+    size_t start_len,
+    size_t max_iter,
+    double tol,
+    double *out,
+    size_t out_len);
+
+#endif

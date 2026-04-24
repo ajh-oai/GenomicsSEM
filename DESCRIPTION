@@ -9,4 +9,5 @@ License: GPL-3.0
 Encoding: UTF-8
 LazyData: true
 Imports: plyr,e1071,readr,gdata,lavaan,doParallel,parallel,foreach,data.table,stringr,splitstackshape,Matrix,R.utils,dplyr,iterators,Rcpp,utils,mgsub
+SystemRequirements: Cargo (Rust toolchain)
 RoxygenNote: 7.2.3

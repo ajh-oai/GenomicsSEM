@@ -1,0 +1,8 @@
+[package]
+name = "genomicssem-core"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+rayon = "1.10"

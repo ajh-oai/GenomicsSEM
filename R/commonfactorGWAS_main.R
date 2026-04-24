@@ -1,10 +1,12 @@
 .commonfactorGWAS_main <- function(i, cores, n, S_LD, V_LD, I_LD, beta_SNP, SE_SNP, varSNP, varSNPSE2, GC, coords, k,
-                                   smooth_check, Model1, toler, estimation, order, utilfuncs=NULL, basemodel=NULL, returnlavmodel=FALSE) {
+                                   smooth_check, Model1, toler, estimation, order, utilfuncs=NULL, basemodel=NULL, returnlavmodel=FALSE,
+                                   Q_SNP=TRUE, fast_fit_start=NULL) {
   if (!is.null(utilfuncs)) {
     for (j in names(utilfuncs)) {
       assign(j, utilfuncs[[j]], envir=environment())
     }
   }
+
   #create empty shell of V_SNP matrix
   V_SNP <- .get_V_SNP(SE_SNP, I_LD, varSNP, GC, coords, k, i)
 
@@ -29,12 +31,9 @@
 
   #reorder sampling covariance matrix based on what lavaan expects given the specified model
   V_Full_Reorder <- V_Full[order, order]
-  u<-nrow(V_Full_Reorder)
-  W<-diag(u)
-  diag(W)<-diag(V_Full_Reorder)
 
   ##invert the reordered sampling covariance matrix to create a weight matrix
-  W <- solve(W,tol=toler)
+  W <- .diag_inverse_from_values(diag(V_Full_Reorder), toler=toler)
 
   #create empty vector for S_SNP
   S_SNP<-vector(mode="numeric",length=k+1)
@@ -79,6 +78,77 @@
     }else{Z_smooth<-0}
   }
 
+  if(estimation == "DWLS" && !returnlavmodel && isTRUE(getOption("GenomicSEM.fast_commonfactor_fit", FALSE))){
+    fast_fit <- .commonfactor_fit_fast(
+      S_Fullrun,
+      V_Full_Reorder,
+      diag(W),
+      fast_fit_start,
+      k,
+      max_iter = getOption("GenomicSEM.fast_commonfactor_max_iter", 100L),
+      tol = getOption("GenomicSEM.fast_commonfactor_tol", 1e-10)
+    )
+
+    if(!is.null(fast_fit) && isTRUE(fast_fit$converged) && all(is.finite(fast_fit$par)) && all(is.finite(fast_fit$se))){
+      model_row <- data.frame(lhs = "F1", op = "~", rhs = "SNP", est = fast_fit$par[k], se = NA_real_, stringsAsFactors = FALSE)
+      se_c <- fast_fit$se[k]
+      Q <- NA
+
+      if(Q_SNP){
+        lambdas <- c(1, fast_fit$par[seq_len(k - 1L)])
+        b <- fast_fit$par[k]
+        theta <- fast_fit$par[k + seq_len(k)]
+        psi <- fast_fit$par[2L * k + 1L]
+        var_x <- fast_fit$par[2L * k + 2L]
+
+        gamma_start <- (S_Fullrun[1, 2:(k + 1L)] - var_x * b * lambdas) / var_x
+        theta_start <- diag(S_Fullrun)[2:(k + 1L)] - lambdas^2 * psi - (lambdas * b + gamma_start)^2 * var_x
+        q_start <- c(gamma_start, theta_start)
+        if(!all(is.finite(q_start))){
+          q_start <- c(rep(0, k), theta)
+        }
+
+        q_fit <- .commonfactor_q_fit_fast(
+          S_Fullrun,
+          V_Full_Reorder,
+          diag(W),
+          c(lambdas, b, psi, var_x),
+          q_start,
+          k,
+          max_iter = getOption("GenomicSEM.fast_commonfactor_q_max_iter", 500L),
+          tol = getOption("GenomicSEM.fast_commonfactor_tol", 1e-10)
+        )
+
+        Q <- tryCatch({
+          if(is.null(q_fit) || !isTRUE(q_fit$converged) || !all(is.finite(q_fit$par)) || !all(is.finite(q_fit$gamma_cov))){
+            NULL
+          } else {
+            ev <- eigen(q_fit$gamma_cov)
+            eta <- cbind(q_fit$par[seq_len(k)])
+            as.numeric(t(eta) %*% ev$vectors %*% .diag_inverse_from_values(ev$values, toler=toler) %*% t(ev$vectors) %*% eta)
+          }
+        }, error = function(e) NULL)
+
+        if(is.null(Q) || !is.finite(Q)){
+          Q <- NA
+        }
+      }
+
+      if(Q_SNP && is.na(Q)){
+        # Fall back to the lavaan path below if the experimental Q solver cannot produce Q.
+      } else {
+        if(smooth_check){
+          results<-data.frame(n + (i-1) * cores,model_row,se_c,Q,0,0,Z_smooth,stringsAsFactors = FALSE)
+          colnames(results) <- c("i", "lhs", "op", "rhs", "est", "se", "se_c", "Q", "fail", "warning", "Z_smooth")
+        } else {
+          results<-data.frame(n + (i-1) * cores,model_row,se_c,Q,0,0,stringsAsFactors = FALSE)
+          colnames(results) <- c("i", "lhs", "op", "rhs", "est", "se", "se_c", "Q", "fail", "warning")
+        }
+        return(results)
+      }
+    }
+  }
+
   ##run the model. save failed runs and run model. warning and error functions prevent loop from breaking if there is an error.
   if(estimation == "DWLS"){
     if (!is.null(basemodel)){
@@ -115,11 +185,14 @@
     ##weight matrix from stage 2
     S2.W <- lavInspect(Model1_Results, "WLS.V")
 
-    #the "bread" part of the sandwich is the naive covariance matrix of parameter estimates that would only be correct if the fit function were correctly specified
-    bread <- solve(t(S2.delt)%*%S2.W%*%S2.delt,tol=toler)
+    if(estimation == "DWLS" && isTRUE(getOption("GenomicSEM.fast_diagonal_wls", FALSE))){
+      lettuce <- S2.delt * diag(S2.W)
+    }else{
+      lettuce <- S2.W%*%S2.delt
+    }
 
-    #create the "lettuce" part of the sandwich
-    lettuce <- S2.W%*%S2.delt
+    #the "bread" part of the sandwich is the naive covariance matrix of parameter estimates that would only be correct if the fit function were correctly specified
+    bread <- solve(t(S2.delt)%*%lettuce,tol=toler)
 
     #ohm-hat-theta-tilde is the corrected sampling covariance matrix of the model parameters
     Ohtt <- bread %*% t(lettuce)%*%V_Full_Reorder%*%lettuce%*%bread
@@ -130,84 +203,98 @@
     ##pull the corrected SE for SNP effect on P-factor
     se_c<-SE[k,1]
 
-    ##code to estimate Q_SNP##
-    #First pull the estimates from Step 1
-    ModelQ <- parTable(Model1_Results)
-    
-    #2023 add: remove additional rows for internal representation of model by lavaan
-     ModelQ<-ModelQ[1:((k*3)+3),]
-
-    #fix the indicator loadings from Step 1, free the direct effects of the SNP on the indicators, and fix the factor residual variance
-    ModelQ$free <- c(rep(0, k+1), 1:(k*2), 0, 0)
-
-    ##added##
-    ModelQ$ustart <- ModelQ$est
-    SNPresid<-resid(Model1_Results)$cov[k+1,1:k]
-
-    for(t in 1:nrow(ModelQ)) {
-      if(ModelQ$free[t] > 0 & ModelQ$free[t] <= k){
-        ModelQ$ustart[t]<-SNPresid[ModelQ$free[t]]} else{}}
-
-    #run the updated common and independent pathways model with fixed indicator loadings and free direct effects. these direct effects are the model residuals
-    if(estimation == "DWLS"){
-      testQ<-.tryCatch.W.E(ModelQ_Results <- sem(model = ModelQ, sample.cov = S_Fullrun, estimator = "DWLS",se="standard", WLS.V = W, sample.nobs = 2,  optim.dx.tol = .01))
-    } else if(estimation == "ML"){
-      testQ<-.tryCatch.W.E(ModelQ_Results <- sem(model = ModelQ, sample.cov = S_Fullrun, estimator = "ML", sample.nobs = 200, optim.dx.tol = .01, sample.cov.rescale=FALSE))
+    if(Q_SNP){
+      ##code to estimate Q_SNP##
+      #First pull the estimates from Step 1
+      ModelQ <- parTable(Model1_Results)
+      
+      #2023 add: remove additional rows for internal representation of model by lavaan
+       ModelQ<-ModelQ[1:((k*3)+3),]
+  
+      #fix the indicator loadings from Step 1, free the direct effects of the SNP on the indicators, and fix the factor residual variance
+      ModelQ$free <- c(rep(0, k+1), 1:(k*2), 0, 0)
+  
+      ##added##
+      ModelQ$ustart <- ModelQ$est
+      SNPresid<-resid(Model1_Results)$cov[k+1,1:k]
+  
+      for(t in 1:nrow(ModelQ)) {
+        if(ModelQ$free[t] > 0 & ModelQ$free[t] <= k){
+          ModelQ$ustart[t]<-SNPresid[ModelQ$free[t]]} else{}}
+  
+      #run the updated common and independent pathways model with fixed indicator loadings and free direct effects. these direct effects are the model residuals
+      if(estimation == "DWLS"){
+        testQ<-.tryCatch.W.E(ModelQ_Results <- sem(model = ModelQ, sample.cov = S_Fullrun, estimator = "DWLS",se="standard", WLS.V = W, sample.nobs = 2,  optim.dx.tol = .01))
+      } else if(estimation == "ML"){
+        testQ<-.tryCatch.W.E(ModelQ_Results <- sem(model = ModelQ, sample.cov = S_Fullrun, estimator = "ML", sample.nobs = 200, optim.dx.tol = .01, sample.cov.rescale=FALSE))
+      }
+  
+      testQ$warning$message[1]<-ifelse(is.null(testQ$warning$message), testQ$warning$message[1]<-"Safe", testQ$warning$message[1])
+      testQ$warning$message[1]<-ifelse(exists("ModelQ_Results") == FALSE, testQ$warning$message[1]<-"lavaan WARNING: model has NOT converged!", ifelse(is.na(inspect(ModelQ_Results, "se")$theta[1,2]) == TRUE ,testQ$warning$message[1]<-"lavaan WARNING: model has NOT converged!" , testQ$warning$message[1]))
+  
+      if(as.character(testQ$warning$message)[1] != "lavaan WARNING: model has NOT converged!"){
+        #pull the delta matrix for Q (this doesn't depend on N)
+        S2.delt_Q <- lavInspect(ModelQ_Results, "delta")
+  
+        ##weight matrix from stage 2 for Q
+        S2.W_Q <- lavInspect(ModelQ_Results, "WLS.V")
+  
+        if(estimation == "DWLS" && isTRUE(getOption("GenomicSEM.fast_diagonal_wls", FALSE))){
+          lettuce_Q <- S2.delt_Q * diag(S2.W_Q)
+        }else{
+          lettuce_Q <- S2.W_Q%*%S2.delt_Q
+        }
+  
+        #the "bread" part of the sandwich is the naive covariance matrix of parameter estimates that would only be correct if the fit function were correctly specified
+        Q_catch<-.tryCatch.W.E(bread_Q <- solve(t(S2.delt_Q)%*%lettuce_Q,tol=toler))
+  
+        if(class(Q_catch$value)[1] == "matrix"){
+  
+          #ohm-hat-theta-tilde is the corrected sampling covariance matrix of the model parameters
+          Ohtt_Q <- bread_Q %*% t(lettuce_Q)%*%V_Full_Reorder%*%lettuce_Q%*%bread_Q
+  
+          ##compute diagonal matrix (Ron calls this lambda, we call it Eig) of eigenvalues of the sampling covariance matrix of the model residuals (V_eta)
+          V_eta<- Ohtt_Q[1:k,1:k]
+          Eig2<-as.matrix(eigen(V_eta)$values)
+          Eig<-.diag_inverse_from_values(Eig2, toler=toler)
+  
+          #Pull P1 (the eigen vectors of V_eta)
+          P1<-eigen(V_eta)$vectors
+  
+          ##Pull eta = vector of direct effects of the SNP (Model Residuals)
+          eta<-cbind(inspect(ModelQ_Results,"list")[(k+2):(2*k+1),14])
+  
+          #Combining all the pieces from above:
+          Q<-t(eta)%*%P1%*%Eig%*%t(P1)%*%eta}} else{Q<-"Not Computed"}
+    }else{
+      Q <- NA
     }
 
-    testQ$warning$message[1]<-ifelse(is.null(testQ$warning$message), testQ$warning$message[1]<-"Safe", testQ$warning$message[1])
-    testQ$warning$message[1]<-ifelse(exists("ModelQ_Results") == FALSE, testQ$warning$message[1]<-"lavaan WARNING: model has NOT converged!", ifelse(is.na(inspect(ModelQ_Results, "se")$theta[1,2]) == TRUE ,testQ$warning$message[1]<-"lavaan WARNING: model has NOT converged!" , testQ$warning$message[1]))
-
-    if(as.character(testQ$warning$message)[1] != "lavaan WARNING: model has NOT converged!"){
-      #pull the delta matrix for Q (this doesn't depend on N)
-      S2.delt_Q <- lavInspect(ModelQ_Results, "delta")
-
-      ##weight matrix from stage 2 for Q
-      S2.W_Q <- lavInspect(ModelQ_Results, "WLS.V")
-
-      #the "bread" part of the sandwich is the naive covariance matrix of parameter estimates that would only be correct if the fit function were correctly specified
-      Q_catch<-.tryCatch.W.E(bread_Q <- solve(t(S2.delt_Q)%*%S2.W_Q%*%S2.delt_Q,tol=toler))
-
-      if(class(Q_catch$value)[1] == "matrix"){
-
-        #create the "lettuce" part of the sandwich
-        lettuce_Q <- S2.W_Q%*%S2.delt_Q
-
-        #ohm-hat-theta-tilde is the corrected sampling covariance matrix of the model parameters
-        Ohtt_Q <- bread_Q %*% t(lettuce_Q)%*%V_Full_Reorder%*%lettuce_Q%*%bread_Q
-
-        ##compute diagonal matrix (Ron calls this lambda, we call it Eig) of eigenvalues of the sampling covariance matrix of the model residuals (V_eta)
-        V_eta<- Ohtt_Q[1:k,1:k]
-        Eig2<-as.matrix(eigen(V_eta)$values)
-        Eig<-diag(k)
-        diag(Eig)<-Eig2
-
-        #Pull P1 (the eigen vectors of V_eta)
-        P1<-eigen(V_eta)$vectors
-
-        ##Pull eta = vector of direct effects of the SNP (Model Residuals)
-        eta<-cbind(inspect(ModelQ_Results,"list")[(k+2):(2*k+1),14])
-
-        #Combining all the pieces from above:
-        Q<-t(eta)%*%P1%*%solve(Eig,tol=toler)%*%t(P1)%*%eta}} else{Q<-"Not Computed"}
+    model_list <- inspect(Model1_Results, "list")
+    model_row <- data.frame(model_list[k+1, c("lhs", "op", "rhs", "est"), drop = FALSE], stringsAsFactors = FALSE)
+    model_row$se <- if("se" %in% colnames(model_list)) model_list[k+1, "se"] else NA_real_
 
     ##pull all the results into a single row
      if(smooth_check){
-      results<-data.frame(n + (i-1) * cores,inspect(Model1_Results,"list")[k+1,-c(1,5:13)],se_c,Q, ifelse(class(test$value)[1] == "lavaan", 0, as.character(test$value$message))[1],  ifelse(class(test$warning)[1] == 'NULL', 0, as.character(test$warning$message[1])),Z_smooth,stringsAsFactors = FALSE)
+      results<-data.frame(n + (i-1) * cores,model_row,se_c,Q, ifelse(class(test$value)[1] == "lavaan", 0, as.character(test$value$message))[1],  ifelse(class(test$warning)[1] == 'NULL', 0, as.character(test$warning$message[1])),Z_smooth,stringsAsFactors = FALSE)
       colnames(results) <- c("i", "lhs", "op", "rhs", "est", "se", "se_c", "Q", "fail", "warning", "Z_smooth")
        } else {
-      results<-data.frame(n + (i-1) * cores,inspect(Model1_Results,"list")[k+1,-c(1,5:13)],se_c,Q, ifelse(class(test$value)[1] == "lavaan", 0, as.character(test$value$message))[1],  ifelse(class(test$warning)[1] == 'NULL', 0, as.character(test$warning$message[1])),stringsAsFactors = FALSE)
+      results<-data.frame(n + (i-1) * cores,model_row,se_c,Q, ifelse(class(test$value)[1] == "lavaan", 0, as.character(test$value$message))[1],  ifelse(class(test$warning)[1] == 'NULL', 0, as.character(test$warning$message[1])),stringsAsFactors = FALSE)
       colnames(results) <- c("i", "lhs", "op", "rhs", "est", "se", "se_c", "Q", "fail", "warning")
         }
     
     
   }else{
     # Reassign i to maintain original order in parallel operation
+    model_list <- inspect(Model1_Results, "list")
+    model_row <- data.frame(model_list[k+1, c("lhs", "op", "rhs", "est"), drop = FALSE], stringsAsFactors = FALSE)
+    model_row$se <- NA_real_
+
     if(smooth_check){
-      results<-data.frame(n + (i-1) * cores,inspect(Model1_Results,"list")[k+1,-c(1,5:13,15)],t(rep(NA,3)),ifelse(class(test$value) == "lavaan", 0, as.character(test$value$message))[1],  ifelse(class(test$warning)[1] == 'NULL', 0, as.character(test$warning$message[1])),Z_smooth,stringsAsFactors = FALSE)
+      results<-data.frame(n + (i-1) * cores,model_row,t(rep(NA,2)),ifelse(class(test$value) == "lavaan", 0, as.character(test$value$message))[1],  ifelse(class(test$warning)[1] == 'NULL', 0, as.character(test$warning$message[1])),Z_smooth,stringsAsFactors = FALSE)
       colnames(results) <- c("i", "lhs", "op", "rhs", "est", "se", "se_c", "Q", "fail", "warning", "Z_smooth")
       } else {
-      results<-data.frame(n + (i-1) * cores,inspect(Model1_Results,"list")[k+1,-c(1,5:13,15)],t(rep(NA,3)),ifelse(class(test$value) == "lavaan", 0, as.character(test$value$message))[1],  ifelse(class(test$warning)[1] == 'NULL', 0, as.character(test$warning$message[1])),stringsAsFactors = FALSE)
+      results<-data.frame(n + (i-1) * cores,model_row,t(rep(NA,2)),ifelse(class(test$value) == "lavaan", 0, as.character(test$value$message))[1],  ifelse(class(test$warning)[1] == 'NULL', 0, as.character(test$warning$message[1])),stringsAsFactors = FALSE)
       colnames(results) <- c("i", "lhs", "op", "rhs", "est", "se", "se_c", "Q", "fail", "warning")
        }
 

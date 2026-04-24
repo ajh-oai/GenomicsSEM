@@ -1,0 +1,14 @@
+PKG_CPPFLAGS = -I.
+RUST_LIB = $(CURDIR)/../target/release/genomicssem_ffi.lib
+PKG_LIBS = $(RUST_LIB) -lws2_32 -ladvapi32 -luserenv -lbcrypt
+
+OBJECTS = native.o init.o
+
+.PHONY: rustlib
+
+all: $(SHLIB)
+
+$(SHLIB): rustlib
+
+rustlib:
+	cargo build --manifest-path="$(CURDIR)/../Cargo.toml" -p genomicssem-ffi --release

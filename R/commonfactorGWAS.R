@@ -1,5 +1,5 @@
 commonfactorGWAS <-function(covstruc=NULL,SNPs=NULL,estimation="DWLS",cores=NULL,toler=FALSE,SNPSE=FALSE,parallel=TRUE,
-                            GC="standard",MPI=FALSE,TWAS=FALSE,smooth_check=FALSE){
+                            GC="standard",MPI=FALSE,TWAS=FALSE,smooth_check=FALSE,Q_SNP=TRUE){
   # Set toler to machine precision to enable passing this to solve() directly
   if (!toler) toler <- .Machine$double.eps
   # Sanity checks
@@ -14,6 +14,7 @@ commonfactorGWAS <-function(covstruc=NULL,SNPs=NULL,estimation="DWLS",cores=NULL
   .check_boolean(MPI)
   .check_boolean(TWAS)
   .check_boolean(smooth_check)
+  .check_boolean(Q_SNP)
   # Sanity checks finished
 
   time <- proc.time()
@@ -186,6 +187,7 @@ output from ldsc (using covstruc = ...)  followed by the output from sumstats (u
     colnamesresults <- c("i", "lhs", "op", "rhs", "est", "se", "se_c", "Q", "fail", "warning")
   }
   LavModel1 <- .commonfactorGWAS_main(1, cores=1, 1, S_LD, V_LD, I_LD, beta_SNP, SE_SNP, varSNP, varSNPSE2, GC, coords, k, smooth_check,Model1, toler, estimation, order,returnlavmodel=TRUE)
+  fast_fit_start <- .commonfactor_fast_start(LavModel1, k)
   if(!parallel){
     if(smooth_check){
       results <- as.data.frame(matrix(NA, ncol=11, nrow=f))
@@ -194,7 +196,7 @@ output from ldsc (using covstruc = ...)  followed by the output from sumstats (u
     }
     colnames(results) <- colnamesresults
     for (i in 1:f) {
-      results[i, ] <- .commonfactorGWAS_main(i,cores=1, 1, S_LD, V_LD, I_LD, beta_SNP, SE_SNP, varSNP, varSNPSE2, GC, coords, k, smooth_check,Model1, toler, estimation, order, basemodel=LavModel1)
+      results[i, ] <- .commonfactorGWAS_main(i,cores=1, 1, S_LD, V_LD, I_LD, beta_SNP, SE_SNP, varSNP, varSNPSE2, GC, coords, k, smooth_check,Model1, toler, estimation, order, basemodel=LavModel1,Q_SNP=Q_SNP,fast_fit_start=fast_fit_start)
     }
   }
   if(parallel){
@@ -230,17 +232,20 @@ output from ldsc (using covstruc = ...)  followed by the output from sumstats (u
     if (Operating != "Windows") {
       results <- foreach(n = icount(int), .combine = 'rbind') %:%
         foreach (i=1:nrow(beta_SNP[[n]]), .combine='rbind', .packages = "lavaan") %dopar% {
-        .commonfactorGWAS_main(i,cores=int, n, S_LD, V_LD, I_LD, beta_SNP[[n]], SE_SNP[[n]], varSNP[[n]], varSNPSE2, GC, coords, k, smooth_check,Model1, toler, estimation, order, basemodel=LavModel1)
+        .commonfactorGWAS_main(i,cores=int, n, S_LD, V_LD, I_LD, beta_SNP[[n]], SE_SNP[[n]], varSNP[[n]], varSNPSE2, GC, coords, k, smooth_check,Model1, toler, estimation, order, basemodel=LavModel1,Q_SNP=Q_SNP,fast_fit_start=fast_fit_start)
       }
     } else {
       utilfuncs <- list()
       utilfuncs[[".tryCatch.W.E"]] <- .tryCatch.W.E
       utilfuncs[[".get_V_SNP"]] <- .get_V_SNP
       utilfuncs[[".get_V_full"]] <- .get_V_full
+      utilfuncs[[".diag_inverse_from_values"]] <- .diag_inverse_from_values
+      utilfuncs[[".commonfactor_fit_fast"]] <- .commonfactor_fit_fast
+      utilfuncs[[".commonfactor_q_fit_fast"]] <- .commonfactor_q_fit_fast
       results <- foreach(n = icount(int), .combine = 'rbind') %:%
         foreach (i=1:nrow(beta_SNP[[n]]), .combine='rbind', .packages = c("lavaan", "gdata"),
                  .export=c(".commonfactorGWAS_main")) %dopar% {
-        .commonfactorGWAS_main(i,cores=int, n, S_LD, V_LD, I_LD, beta_SNP[[n]], SE_SNP[[n]], varSNP[[n]], varSNPSE2, GC, coords, k, smooth_check,Model1, toler, estimation, order, utilfuncs, basemodel=LavModel1)
+        .commonfactorGWAS_main(i,cores=int, n, S_LD, V_LD, I_LD, beta_SNP[[n]], SE_SNP[[n]], varSNP[[n]], varSNPSE2, GC, coords, k, smooth_check,Model1, toler, estimation, order, utilfuncs, basemodel=LavModel1,Q_SNP=Q_SNP,fast_fit_start=fast_fit_start)
       }
     }
     colnames(results) <- colnamesresults

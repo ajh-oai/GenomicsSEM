@@ -1,0 +1,21 @@
+PKG_CPPFLAGS = -I.
+
+UNAME_S := $(shell uname -s)
+RUST_LIB = $(CURDIR)/../target/release/libgenomicssem_ffi.a
+
+ifeq ($(UNAME_S),Darwin)
+PKG_LIBS = $(RUST_LIB) -framework Security -framework CoreFoundation -lpthread -lm
+else
+PKG_LIBS = $(RUST_LIB) -lpthread -ldl -lm
+endif
+
+OBJECTS = native.o init.o
+
+.PHONY: rustlib
+
+all: $(SHLIB)
+
+$(SHLIB): rustlib
+
+rustlib:
+	cargo build --manifest-path="$(CURDIR)/../Cargo.toml" -p genomicssem-ffi --release

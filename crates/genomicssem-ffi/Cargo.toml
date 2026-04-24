@@ -1,0 +1,11 @@
+[package]
+name = "genomicssem-ffi"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+genomicssem-core = { path = "../genomicssem-core" }

@@ -224,3 +224,243 @@ return(S_Full)
     }
     return(Z_pre)
 }
+
+.diag_inverse_from_values <- function(values, toler = .Machine$double.eps) {
+  values <- as.numeric(values)
+  if (!isTRUE(getOption("GenomicSEM.fast_diag_inverse", TRUE))) {
+    fallback <- diag(length(values))
+    diag(fallback) <- values
+    return(solve(fallback, tol = toler))
+  }
+
+  scale <- max(abs(values))
+
+  if (!is.finite(scale) || scale == 0 || any(!is.finite(values)) || min(abs(values)) / scale < toler) {
+    fallback <- diag(length(values))
+    diag(fallback) <- values
+    return(solve(fallback, tol = toler))
+  }
+
+  out <- diag(length(values))
+  diag(out) <- 1 / values
+  out
+}
+
+.get_V_full_r <- .get_V_full
+.get_V_SNP_r <- .get_V_SNP
+.get_S_Full_r <- .get_S_Full
+.get_Z_pre_r <- .get_Z_pre
+
+.genomicssem_native_state <- new.env(parent = emptyenv())
+.genomicssem_native_state$rust_loaded <- NA
+
+.genomicssem_use_rust <- function() {
+  if (!isTRUE(getOption("GenomicSEM.use_rust", TRUE))) {
+    return(FALSE)
+  }
+
+  if (is.na(.genomicssem_native_state$rust_loaded)) {
+    .genomicssem_native_state$rust_loaded <- is.loaded("genomicssem_get_v_snp_call")
+  }
+
+  .genomicssem_native_state$rust_loaded
+}
+
+.get_V_full <- function(k, V_LD, varSNPSE2, V_SNP) {
+  if (.genomicssem_use_rust()) {
+    return(.Call(
+      "genomicssem_get_v_full_call",
+      as.integer(k),
+      as.matrix(V_LD),
+      as.numeric(varSNPSE2),
+      as.matrix(V_SNP),
+      PACKAGE = "GenomicSEM"
+    ))
+  }
+
+  .get_V_full_r(k, V_LD, varSNPSE2, V_SNP)
+}
+
+.get_V_SNP <- function(SE_SNP, I_LD, varSNP, GC, coords, k, i) {
+  if (.genomicssem_use_rust()) {
+    return(.Call(
+      "genomicssem_get_v_snp_call",
+      as.matrix(SE_SNP),
+      as.matrix(I_LD),
+      as.numeric(varSNP),
+      as.character(GC),
+      coords,
+      as.integer(k),
+      as.integer(i),
+      PACKAGE = "GenomicSEM"
+    ))
+  }
+
+  .get_V_SNP_r(SE_SNP, I_LD, varSNP, GC, coords, k, i)
+}
+
+.get_V_SNP_batch <- function(SE_SNP, I_LD, varSNP, GC, coords, k, n_threads = 1L) {
+  if (!.genomicssem_use_rust()) {
+    out <- array(NA_real_, dim = c(k, k, nrow(SE_SNP)))
+    for (i in seq_len(nrow(SE_SNP))) {
+      out[, , i] <- .get_V_SNP_r(SE_SNP, I_LD, varSNP, GC, coords, k, i)
+    }
+    return(out)
+  }
+
+  .Call(
+    "genomicssem_get_v_snp_batch_call",
+    as.matrix(SE_SNP),
+    as.matrix(I_LD),
+    as.numeric(varSNP),
+    as.character(GC),
+    coords,
+    as.integer(k),
+    as.integer(n_threads),
+    PACKAGE = "GenomicSEM"
+  )
+}
+
+.commonfactor_fast_start <- function(fit, k) {
+  co <- coef(fit)
+  start <- numeric(2 * k + 2)
+  loading_idx <- grep("=~", names(co), fixed = TRUE)
+  if (length(loading_idx) != k - 1L) {
+    return(NULL)
+  }
+  start[seq_len(k - 1L)] <- co[loading_idx]
+
+  factor_regression <- co[["F1~SNP"]]
+  if (is.null(factor_regression) || is.na(factor_regression)) {
+    return(NULL)
+  }
+  start[k] <- factor_regression
+
+  for (j in seq_len(k)) {
+    trait_name <- rownames(inspect(fit)[[1]])[j + 1L]
+    residual_name <- paste0(trait_name, "~~", trait_name)
+    residual <- co[[residual_name]]
+    if (is.null(residual) || is.na(residual)) {
+      return(NULL)
+    }
+    start[k + j] <- residual
+  }
+
+  factor_var <- co[["F1~~F1"]]
+  snp_var <- co[["SNP~~SNP"]]
+  if (is.null(factor_var) || is.null(snp_var) || is.na(factor_var) || is.na(snp_var)) {
+    return(NULL)
+  }
+  start[2 * k + 1L] <- factor_var
+  start[2 * k + 2L] <- snp_var
+  start
+}
+
+.commonfactor_fit_fast <- function(S_Fullrun, V_Full_Reorder, W_diag, start, k, max_iter = 100L, tol = 1e-10) {
+  if (!.genomicssem_use_rust() || is.null(start)) {
+    return(NULL)
+  }
+
+  out <- tryCatch(
+    .Call(
+      "genomicssem_fit_commonfactor_main_call",
+      as.integer(k),
+      as.matrix(S_Fullrun),
+      as.matrix(V_Full_Reorder),
+      as.numeric(W_diag),
+      as.numeric(start),
+      as.integer(max_iter),
+      as.numeric(tol),
+      PACKAGE = "GenomicSEM"
+    ),
+    error = function(e) NULL
+  )
+
+  if (is.null(out)) {
+    return(NULL)
+  }
+
+  q <- 2 * k + 2L
+  list(
+    par = out[seq_len(q)],
+    se = out[q + seq_len(q)],
+    objective = out[2L * q + 1L],
+    converged = isTRUE(out[2L * q + 2L] == 1),
+    iterations = as.integer(out[2L * q + 3L])
+  )
+}
+
+.commonfactor_q_fit_fast <- function(S_Fullrun, V_Full_Reorder, W_diag, fixed, start, k, max_iter = 100L, tol = 1e-10) {
+  if (!.genomicssem_use_rust() || is.null(fixed) || is.null(start)) {
+    return(NULL)
+  }
+
+  out <- tryCatch(
+    .Call(
+      "genomicssem_fit_commonfactor_q_call",
+      as.integer(k),
+      as.matrix(S_Fullrun),
+      as.matrix(V_Full_Reorder),
+      as.numeric(W_diag),
+      as.numeric(fixed),
+      as.numeric(start),
+      as.integer(max_iter),
+      as.numeric(tol),
+      PACKAGE = "GenomicSEM"
+    ),
+    error = function(e) NULL
+  )
+
+  if (is.null(out)) {
+    return(NULL)
+  }
+
+  q <- 2 * k
+  list(
+    par = out[seq_len(q)],
+    gamma_cov = matrix(out[q + seq_len(k * k)], nrow = k, ncol = k),
+    objective = out[q + k * k + 1L],
+    converged = isTRUE(out[q + k * k + 2L] == 1),
+    iterations = as.integer(out[q + k * k + 3L])
+  )
+}
+
+.get_S_Full <- function(n_phenotypes, S_LD, varSNP, beta_SNP, TWAS, i) {
+  if (.genomicssem_use_rust()) {
+    S_Full <- .Call(
+      "genomicssem_get_s_full_call",
+      as.integer(n_phenotypes),
+      as.matrix(S_LD),
+      as.numeric(varSNP),
+      as.matrix(beta_SNP),
+      as.integer(i),
+      PACKAGE = "GenomicSEM"
+    )
+
+    first_name <- if (TWAS) "Gene" else "SNP"
+    S_names <- c(first_name, colnames(S_LD))
+    dimnames(S_Full) <- list(S_names, S_names)
+    return(S_Full)
+  }
+
+  .get_S_Full_r(n_phenotypes, S_LD, varSNP, beta_SNP, TWAS, i)
+}
+
+.get_Z_pre <- function(i, beta_SNP, SE_SNP, I_LD, GC) {
+  if (.genomicssem_use_rust()) {
+    Z_pre <- .Call(
+      "genomicssem_get_z_pre_call",
+      as.integer(i),
+      as.matrix(beta_SNP),
+      as.matrix(SE_SNP),
+      as.matrix(I_LD),
+      as.character(GC),
+      PACKAGE = "GenomicSEM"
+    )
+
+    names(Z_pre) <- colnames(as.matrix(beta_SNP))
+    return(Z_pre)
+  }
+
+  .get_Z_pre_r(i, beta_SNP, SE_SNP, I_LD, GC)
+}

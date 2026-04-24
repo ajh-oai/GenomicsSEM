@@ -7,6 +7,7 @@
       assign(j, utilfuncs[[j]], envir=environment())
     }
   }
+
   V_SNP <- .get_V_SNP(SE_SNP, I_LD, varSNP, GC, coords, k, i)
   
   if (smooth_check) {
@@ -22,12 +23,9 @@
   
   #reorder sampling covariance matrix based on what lavaan expects given the specified model
   V_full_Reorder <- V_full[order, order]
-  u <- nrow(V_full_Reorder)
-  W <- diag(u)
-  diag(W) <- diag(V_full_Reorder)
   
   ##invert the reordered sampling covariance matrix to create a weight matrix
-  W <- solve(W, tol=toler)
+  W <- .diag_inverse_from_values(diag(V_full_Reorder), toler=toler)
   
   S_Fullrun<-.get_S_Full(k,S_LD,varSNP,beta_SNP,TWAS,i)
   
@@ -89,11 +87,14 @@
     ##weight matrix from stage 2
     S2.W <- lavInspect(Model1_Results, "WLS.V")
     
-    #the "bread" part of the sandwich is the naive covariance matrix of parameter estimates that would only be correct if the fit function were correctly specified
-    bread <- solve(t(S2.delt)%*%S2.W%*%S2.delt,tol=toler)
+    if(estimation == "DWLS" && isTRUE(getOption("GenomicSEM.fast_diagonal_wls", FALSE))){
+      lettuce <- S2.delt * diag(S2.W)
+    }else{
+      lettuce <- S2.W%*%S2.delt
+    }
     
-    #create the "lettuce" part of the sandwich
-    lettuce <- S2.W%*%S2.delt
+    #the "bread" part of the sandwich is the naive covariance matrix of parameter estimates that would only be correct if the fit function were correctly specified
+    bread <- solve(t(S2.delt)%*%lettuce,tol=toler)
     
     #ohm-hat-theta-tilde is the corrected sampling covariance matrix of the model parameters
     Ohtt <- bread %*% t(lettuce)%*%V_full_Reorder%*%lettuce%*%bread
@@ -196,8 +197,7 @@
     
     #calculate model chi-square
     Eig <- as.matrix(eigen(V_full)$values)
-    Eig2 <- diag((ncol(S_Fullrun)*(ncol(S_Fullrun)+1))/2)
-    diag(Eig2) <- Eig
+    Eig2 <- .diag_inverse_from_values(Eig, toler=toler)
     
     #Pull P1 (the eigen vectors of V_eta)
     P1 <- eigen(V_full)$vectors
@@ -207,7 +207,7 @@
     implied[[1]] <- implied[[1]][implied_order,implied_order]
     implied2 <- S_Fullrun-implied[[1]]
     eta <- as.vector(lowerTriangle(implied2,diag=TRUE))
-    Q <- t(eta)%*%P1%*%solve(Eig2)%*%t(P1)%*%eta
+    Q <- t(eta)%*%P1%*%Eig2%*%t(P1)%*%eta
     
     #new Q_SNP calculation
     if(Q_SNP){
@@ -252,11 +252,8 @@
           #calculate eigen values V_SNP matrix
           Eig<-as.matrix(eigen(V_SNP_i)$values)
           
-          #create empty matrix 
-          Eig2<-diag(length(indicators))
-          
-          #put eigen values in diagonal of the matrix
-          diag(Eig2)<-Eig
+          #invert the eigenvalue diagonal used in the Q_SNP quadratic form
+          Eig2<-.diag_inverse_from_values(Eig, toler=toler)
           
           #Pull P1 (the eigen vectors of V_SNP)
           P1<-eigen(V_SNP_i)$vectors
@@ -265,7 +262,7 @@
           eta<-as.vector(implied2[1,indicators])
           
           #calculate model chi-square for only the SNP portion of the model for those factor indicators
-          Q_SNP_result[b]<-t(eta)%*%P1%*%solve(Eig2)%*%t(P1)%*%eta
+          Q_SNP_result[b]<-t(eta)%*%P1%*%Eig2%*%t(P1)%*%eta
           Q_SNP_df[b]<-length(indicators)-1
         }else{
           Q_SNP_result[b]<-NA
@@ -380,17 +377,19 @@
     }
   }
   
+  warn_names <- if(printwarn) c("error","warning") else character()
+
   if(TWAS){
     if(Q_SNP){
-      new_names <- c("i", "Gene","Panel","HSQ", "lhs", "op", "rhs", "free", "label", "est", "SE", "Z_Estimate", "Pval_Estimate","chisq","chisq_df","chisq_pval", "AIC","Q_SNP","Q_SNP_df","Q_SNP_pval", "error","warning")
+      new_names <- c("i", "Gene","Panel","HSQ", "lhs", "op", "rhs", "free", "label", "est", "SE", "Z_Estimate", "Pval_Estimate","chisq","chisq_df","chisq_pval", "AIC","Q_SNP","Q_SNP_df","Q_SNP_pval", warn_names)
     }else{
-      new_names <- c("i", "Gene","Panel","HSQ", "lhs", "op", "rhs", "free", "label", "est", "SE", "Z_Estimate", "Pval_Estimate","chisq","chisq_df","chisq_pval", "AIC","error","warning")
+      new_names <- c("i", "Gene","Panel","HSQ", "lhs", "op", "rhs", "free", "label", "est", "SE", "Z_Estimate", "Pval_Estimate","chisq","chisq_df","chisq_pval", "AIC", warn_names)
     }
   }else{
     if(Q_SNP){
-      new_names <- c("i", "SNP", "CHR", "BP", "MAF", "A1", "A2", "lhs", "op", "rhs", "free", "label", "est", "SE", "Z_Estimate", "Pval_Estimate","chisq","chisq_df","chisq_pval", "AIC","Q_SNP","Q_SNP_df","Q_SNP_pval", "error","warning")
+      new_names <- c("i", "SNP", "CHR", "BP", "MAF", "A1", "A2", "lhs", "op", "rhs", "free", "label", "est", "SE", "Z_Estimate", "Pval_Estimate","chisq","chisq_df","chisq_pval", "AIC","Q_SNP","Q_SNP_df","Q_SNP_pval", warn_names)
     }else{
-      new_names <- c("i", "SNP", "CHR", "BP", "MAF", "A1", "A2", "lhs", "op", "rhs", "free", "label", "est", "SE", "Z_Estimate", "Pval_Estimate","chisq","chisq_df","chisq_pval", "AIC","error","warning")
+      new_names <- c("i", "SNP", "CHR", "BP", "MAF", "A1", "A2", "lhs", "op", "rhs", "free", "label", "est", "SE", "Z_Estimate", "Pval_Estimate","chisq","chisq_df","chisq_pval", "AIC", warn_names)
     }
   }
   

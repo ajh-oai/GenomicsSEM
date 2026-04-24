@@ -5,3 +5,7 @@
 ^.*\.log$
 ^.*\.Rhistory$
 ^build$
+^target$
+^src/.*\.(o|so|dll|dylib)$
+^.*\.Rcheck$
+^benches/profiles$

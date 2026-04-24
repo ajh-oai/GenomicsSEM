@@ -334,6 +334,7 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
       utilfuncs[[".get_V_SNP"]] <- .get_V_SNP
       utilfuncs[[".get_Z_pre"]] <- .get_Z_pre
       utilfuncs[[".get_V_full"]] <- .get_V_full
+      utilfuncs[[".diag_inverse_from_values"]] <- .diag_inverse_from_values
       results <- foreach(n = icount(int), .combine = 'rbind') %:%
         foreach (i=1:nrow(beta_SNP[[n]]), .combine='rbind', .packages = c("lavaan", "gdata"),
                  .export=c(".userGWAS_main")) %dopar% {
