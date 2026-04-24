@@ -703,3 +703,31 @@ Interpretation:
 - Batching the supported `userGWAS()` Rust fast path improves `Q_SNP=FALSE` from the previous `0.758s -> 0.479s` single-core and `0.535s -> 0.242s` on 4 cores.
 - For `Q_SNP=TRUE`, the checkpoint improves from `0.762s -> 0.446s` single-core and `0.366s -> 0.256s` on 4 cores.
 - On a traced 100-SNP/12-trait `Q_SNP=TRUE` run, the native batch call took about `0.243s`, R result assembly took about `0.063s`, and total elapsed was about `0.473s`; the rest is mostly one-time lavaan setup used to build the parameter table/order.
+
+## 2026-04-24 03:18 PDT - Release-readiness hardening
+
+Change set:
+
+- Added fast-path attributes on returned objects: `GenomicSEM.fast_path`, `GenomicSEM.fast_threads`, and optional `GenomicSEM.fast_fallback_reason`.
+- Added `options(GenomicSEM.fast_diagnostics=TRUE)` for explicit fast-path use/fallback messages.
+- Added `options(GenomicSEM.fast_strict=TRUE)` to error instead of silently falling back when a requested batched Rust fast path is unavailable.
+- Added `tests/fast-path-release.R` to assert that threaded batch paths are used and strict fallback is enforced.
+- Documented the Rust fast-path options, source-build Cargo requirement, and result attributes in README/Rd/PATCHNOTES.
+- Fixed the touched `commonfactorGWAS.Rd` and `userGWAS.Rd` usage signatures so they match the current function signatures.
+
+Validation:
+
+```sh
+R CMD INSTALL --install-tests .
+Rscript tests/fast-path-release.R
+Rscript tests/commonfactor-fast-fit.R
+Rscript tests/commonfactor-qsnp.R
+Rscript tests/usergwas-fast-fit.R
+Rscript tests/usergwas-printwarn.R
+Rscript tests/rust-kernel-parity.R
+cargo test --workspace
+R CMD build .
+R CMD check --no-manual GenomicSEM_0.0.5.tar.gz
+```
+
+`R CMD check` status: 8 WARNINGs, 4 NOTEs. The warnings/notes are the remaining pre-existing package-level items plus the Rust static-library `_abort` note; all package tests passed. The touched `commonfactorGWAS` and `userGWAS` Rd mismatch warnings are cleared.

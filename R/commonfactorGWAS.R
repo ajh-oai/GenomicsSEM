@@ -198,6 +198,9 @@ output from ldsc (using covstruc = ...)  followed by the output from sumstats (u
   }
 
   batch_results <- NULL
+  fast_path <- if(use_fast_commonfactor) "rust_commonfactor_requested" else "disabled"
+  fast_threads <- NA_integer_
+  fast_fallback_reason <- NULL
   if(use_fast_commonfactor && !smooth_check && !MPI){
     batch_threads <- 1L
     if(parallel){
@@ -210,6 +213,7 @@ output from ldsc (using covstruc = ...)  followed by the output from sumstats (u
       }
       batch_threads <- max(1L, batch_threads)
     }
+    fast_threads <- batch_threads
 
     batch_fit <- .commonfactor_batch_fit_fast(
       S_LD = S_LD,
@@ -230,6 +234,8 @@ output from ldsc (using covstruc = ...)  followed by the output from sumstats (u
     )
 
     if(!is.null(batch_fit)){
+      fast_path <- "rust_commonfactor_batch"
+      .fast_note("commonfactorGWAS", sprintf("using batched Rust fit with %d thread(s)", batch_threads))
       batch_results <- data.frame(
         i = seq_len(f),
         lhs = rep("F1", f),
@@ -244,7 +250,19 @@ output from ldsc (using covstruc = ...)  followed by the output from sumstats (u
         stringsAsFactors = FALSE
       )
       colnames(batch_results) <- colnamesresults
+    } else {
+      fast_fallback_reason <- "native batched commonfactor fit did not return a finite converged result"
+      .fast_fallback("commonfactorGWAS", fast_fallback_reason)
     }
+  } else if(use_fast_commonfactor) {
+    fast_fallback_reason <- if(smooth_check) {
+      "smooth_check=TRUE is not supported by the batched Rust commonfactor path"
+    } else if(MPI) {
+      "MPI=TRUE is not supported by the batched Rust commonfactor path"
+    } else {
+      "batched Rust commonfactor preconditions were not met"
+    }
+    .fast_fallback("commonfactorGWAS", fast_fallback_reason)
   }
 
   if(!is.null(batch_results)){
@@ -339,5 +357,9 @@ output from ldsc (using covstruc = ...)  followed by the output from sumstats (u
   } else {
     colnames(results)[(length(colnames(results))-1):length(colnames(results))] <- c("fail", "warning")
   }
+  if(!is.null(fast_fallback_reason) && fast_path == "rust_commonfactor_requested"){
+    fast_path <- "fallback_loop"
+  }
+  results <- .set_fast_path_attr(results, fast_path, fast_threads, fast_fallback_reason)
   return(results)
 }

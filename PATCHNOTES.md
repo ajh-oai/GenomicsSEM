@@ -1,5 +1,8 @@
 Log of version histories.
 
+**0.0.5d** Rust-backed GWAS fast paths.
+This development update adds native Rust kernels and opt-in batched model-fitting fast paths for supported `commonfactorGWAS()` and `userGWAS()` DWLS workflows. The fast paths keep the existing R output shape and fall back to the lavaan implementation for unsupported inputs unless `options(GenomicSEM.fast_strict=TRUE)` is set. Use `options(GenomicSEM.fast_diagnostics=TRUE)` or inspect the `GenomicSEM.fast_path` result attribute to verify whether a run used the Rust batch path.
+
 **0.0.1** Initial release  
 Able to perfrom all analysis in preprint
 

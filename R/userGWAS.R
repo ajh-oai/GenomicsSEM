@@ -236,10 +236,17 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
   
   f <- nrow(beta_SNP)
   use_fast_usergwas <- estimation == "DWLS" && isTRUE(getOption("GenomicSEM.fast_usergwas_fit", FALSE))
+  fast_path <- if(use_fast_usergwas) "rust_usergwas_requested" else "disabled"
+  fast_threads <- NA_integer_
+  fast_fallback_reason <- NULL
   LavModel1 <- NULL
   fast_fit_spec <- NULL
   if(use_fast_usergwas){
     fast_fit_spec <- .sem_fast_compile(parTable(ReorderModel), rownames(inspect(ReorderModel)[[1]]))
+    if(!isTRUE(fast_fit_spec$supported)){
+      fast_fallback_reason <- paste("unsupported model for Rust userGWAS fit:", fast_fit_spec$reason)
+      .fast_fallback("userGWAS", fast_fallback_reason)
+    }
   }else{
     # Run a single SNP to obtain base Lavaan model object
     LavModel1 <- .userGWAS_main(i=1, cores=1, n_phenotypes, n=1, I_LD, V_LD, S_LD, std.lv, varSNPSE2, order, SNPs, beta_SNP, SE_SNP, varSNP, GC,
@@ -259,6 +266,7 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
       }
       batch_threads <- max(1L, batch_threads)
     }
+    fast_threads <- batch_threads
 
     q_snp_info <- .sem_fast_q_snp_info(fast_fit_spec, model, S_LD, TWAS, Q_SNP)
     observed_original_names <- c(if(TWAS) "Gene" else "SNP", colnames(S_LD))
@@ -282,6 +290,8 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
     )
 
     if(!is.null(batch_fit)){
+      fast_path <- "rust_usergwas_batch"
+      .fast_note("userGWAS", sprintf("using batched Rust fit with %d thread(s)", batch_threads))
       if(TWAS){
         print("Starting TWAS Estimation")
       } else {
@@ -299,10 +309,25 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
         npar = npar,
         model = model
       )
+      Results_List <- .set_fast_path_attr(Results_List, fast_path, fast_threads)
       time_all <- proc.time()-time
       print(time_all[3])
       return(Results_List)
+    } else {
+      fast_fallback_reason <- "native batched userGWAS fit did not return a finite converged result"
+      .fast_fallback("userGWAS", fast_fallback_reason)
     }
+  } else if(use_fast_usergwas && !is.null(fast_fit_spec) && isTRUE(fast_fit_spec$supported)) {
+    fast_fallback_reason <- if(sub[[1]] != FALSE) {
+      "sub is not supported by the batched Rust userGWAS path"
+    } else if(smooth_check) {
+      "smooth_check=TRUE is not supported by the batched Rust userGWAS path"
+    } else if(MPI) {
+      "MPI=TRUE is not supported by the batched Rust userGWAS path"
+    } else {
+      "batched Rust userGWAS preconditions were not met"
+    }
+    .fast_fallback("userGWAS", fast_fallback_reason)
   }
 
   if(!parallel){
@@ -351,6 +376,12 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
     
     time_all <- proc.time()-time
     print(time_all[3])
+    if(!is.null(fast_fallback_reason) && fast_path == "rust_usergwas_requested"){
+      fast_path <- "fallback_loop"
+    } else if(fast_path == "rust_usergwas_requested"){
+      fast_path <- "rust_usergwas_per_snp"
+    }
+    Results_List <- .set_fast_path_attr(Results_List, fast_path, fast_threads, fast_fallback_reason)
     return(Results_List)
     
   } else {
@@ -451,6 +482,12 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
     
     time_all <- proc.time()-time
     print(time_all[3])
+    if(!is.null(fast_fallback_reason) && fast_path == "rust_usergwas_requested"){
+      fast_path <- "fallback_loop"
+    } else if(fast_path == "rust_usergwas_requested"){
+      fast_path <- "rust_usergwas_per_snp"
+    }
+    Results_List <- .set_fast_path_attr(Results_List, fast_path, fast_threads, fast_fallback_reason)
     return(Results_List)
     
   }

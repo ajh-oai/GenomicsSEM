@@ -266,6 +266,40 @@ return(S_Full)
   .genomicssem_native_state$rust_loaded
 }
 
+.fast_diagnostics_enabled <- function() {
+  isTRUE(getOption("GenomicSEM.fast_diagnostics", FALSE))
+}
+
+.fast_strict_enabled <- function() {
+  isTRUE(getOption("GenomicSEM.fast_strict", FALSE))
+}
+
+.fast_note <- function(workflow, message) {
+  if (.fast_diagnostics_enabled()) {
+    message(sprintf("GenomicSEM fast path [%s]: %s", workflow, message))
+  }
+}
+
+.fast_fallback <- function(workflow, reason) {
+  fallback_message <- sprintf("GenomicSEM fast path [%s] fallback: %s", workflow, reason)
+  if (.fast_strict_enabled()) {
+    stop(fallback_message, call. = FALSE)
+  }
+  if (.fast_diagnostics_enabled()) {
+    message(fallback_message)
+  }
+  invisible(NULL)
+}
+
+.set_fast_path_attr <- function(x, path, threads = NA_integer_, reason = NULL) {
+  attr(x, "GenomicSEM.fast_path") <- path
+  attr(x, "GenomicSEM.fast_threads") <- threads
+  if (!is.null(reason)) {
+    attr(x, "GenomicSEM.fast_fallback_reason") <- reason
+  }
+  x
+}
+
 .get_V_full <- function(k, V_LD, varSNPSE2, V_SNP) {
   if (.genomicssem_use_rust()) {
     return(.Call(
