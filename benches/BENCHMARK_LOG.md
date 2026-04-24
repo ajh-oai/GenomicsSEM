@@ -654,7 +654,11 @@ Rscript tests/usergwas-fast-fit.R
 Rscript tests/usergwas-printwarn.R
 Rscript tests/commonfactor-fast-fit.R
 Rscript tests/commonfactor-qsnp.R
+R CMD build .
+R CMD check --no-manual GenomicSEM_0.0.5.tar.gz
 ```
+
+`R CMD check` status: 8 WARNINGs, 4 NOTEs, matching the existing package-level noise class; all package tests passed.
 
 Benchmark command, `Q_SNP=FALSE`:
 
@@ -698,4 +702,4 @@ Interpretation:
 
 - Batching the supported `userGWAS()` Rust fast path improves `Q_SNP=FALSE` from the previous `0.758s -> 0.479s` single-core and `0.535s -> 0.242s` on 4 cores.
 - For `Q_SNP=TRUE`, the checkpoint improves from `0.762s -> 0.446s` single-core and `0.366s -> 0.256s` on 4 cores.
-- The remaining runtime is now mostly output assembly and the one-time lavaan setup used to build the parameter table/order.
+- On a traced 100-SNP/12-trait `Q_SNP=TRUE` run, the native batch call took about `0.243s`, R result assembly took about `0.063s`, and total elapsed was about `0.473s`; the rest is mostly one-time lavaan setup used to build the parameter table/order.
