@@ -458,6 +458,152 @@ return(S_Full)
   )
 }
 
+.sem_fast_numeric_value <- function(x, fallback = 0) {
+  x <- suppressWarnings(as.numeric(x))
+  ifelse(is.finite(x), x, fallback)
+}
+
+.sem_fast_compile <- function(ptable, observed_names) {
+  unsupported_ops <- setdiff(unique(ptable$op), c("=~", "~", "~~"))
+  if (length(unsupported_ops) > 0L) {
+    return(list(supported = FALSE, reason = paste("unsupported ops:", paste(unsupported_ops, collapse = ","))))
+  }
+
+  observed_names <- as.character(observed_names)
+  latent_names <- unique(ptable$lhs[ptable$op == "=~"])
+  latent_names <- setdiff(latent_names, observed_names)
+  total_names <- c(observed_names, latent_names)
+
+  if (length(total_names) == 0L || anyNA(match(c(ptable$lhs, ptable$rhs), total_names))) {
+    return(list(supported = FALSE, reason = "could not map model variables"))
+  }
+
+  free_ids <- sort(unique(ptable$free[ptable$free > 0]))
+  if (length(free_ids) == 0L) {
+    return(list(supported = FALSE, reason = "no free parameters"))
+  }
+
+  free_map <- seq_along(free_ids)
+  names(free_map) <- as.character(free_ids)
+  ptable$free_fast <- ifelse(ptable$free > 0, free_map[as.character(ptable$free)], 0L)
+
+  total_n <- length(total_names)
+  b_fixed <- matrix(0, total_n, total_n, dimnames = list(total_names, total_names))
+  psi_fixed <- matrix(0, total_n, total_n, dimnames = list(total_names, total_names))
+  b_free <- matrix(0L, total_n, total_n, dimnames = list(total_names, total_names))
+  psi_free <- matrix(0L, total_n, total_n, dimnames = list(total_names, total_names))
+  start <- rep(0, length(free_ids))
+
+  value_for_row <- function(row) {
+    est <- .sem_fast_numeric_value(ptable$est[row], NA_real_)
+    if (is.finite(est)) {
+      return(est)
+    }
+    ustart <- .sem_fast_numeric_value(ptable$ustart[row], NA_real_)
+    if (is.finite(ustart)) {
+      return(ustart)
+    }
+    if (ptable$op[row] == "~~" && ptable$lhs[row] == ptable$rhs[row]) {
+      return(1)
+    }
+    0
+  }
+
+  for (row in seq_len(nrow(ptable))) {
+    op <- ptable$op[row]
+    lhs <- ptable$lhs[row]
+    rhs <- ptable$rhs[row]
+    value <- value_for_row(row)
+    free <- as.integer(ptable$free_fast[row])
+
+    if (free > 0L && start[free] == 0) {
+      start[free] <- value
+    }
+
+    if (op == "=~") {
+      target_row <- rhs
+      target_col <- lhs
+      if (free > 0L) {
+        b_free[target_row, target_col] <- free
+      } else {
+        b_fixed[target_row, target_col] <- value
+      }
+    } else if (op == "~") {
+      if (free > 0L) {
+        b_free[lhs, rhs] <- free
+      } else {
+        b_fixed[lhs, rhs] <- value
+      }
+    } else if (op == "~~") {
+      if (free > 0L) {
+        psi_free[lhs, rhs] <- free
+        psi_free[rhs, lhs] <- free
+      } else {
+        psi_fixed[lhs, rhs] <- value
+        psi_fixed[rhs, lhs] <- value
+      }
+    }
+  }
+
+  start[!is.finite(start)] <- 0
+  list(
+    supported = TRUE,
+    ptable = ptable,
+    observed_names = observed_names,
+    latent_names = latent_names,
+    total_names = total_names,
+    b_fixed = b_fixed,
+    psi_fixed = psi_fixed,
+    b_free = b_free,
+    psi_free = psi_free,
+    start = start
+  )
+}
+
+.sem_fit_fast <- function(S_Fullrun, V_Full_Reorder, W_diag, spec, max_iter = 100L, tol = 1e-10) {
+  if (!.genomicssem_use_rust() || is.null(spec) || !isTRUE(spec$supported)) {
+    return(NULL)
+  }
+
+  out <- tryCatch(
+    .Call(
+      "genomicssem_fit_generic_sem_call",
+      as.integer(length(spec$observed_names)),
+      as.integer(length(spec$total_names)),
+      as.matrix(S_Fullrun),
+      as.matrix(V_Full_Reorder),
+      as.numeric(W_diag),
+      as.matrix(spec$b_fixed),
+      as.matrix(spec$psi_fixed),
+      matrix(as.integer(spec$b_free), nrow = nrow(spec$b_free), ncol = ncol(spec$b_free)),
+      matrix(as.integer(spec$psi_free), nrow = nrow(spec$psi_free), ncol = ncol(spec$psi_free)),
+      as.numeric(spec$start),
+      as.integer(max_iter),
+      as.numeric(tol),
+      PACKAGE = "GenomicSEM"
+    ),
+    error = function(e) NULL
+  )
+
+  if (is.null(out)) {
+    return(NULL)
+  }
+
+  q <- length(spec$start)
+  obs_n <- length(spec$observed_names)
+  implied <- matrix(out[2L * q + seq_len(obs_n * obs_n)], nrow = obs_n, ncol = obs_n)
+  dimnames(implied) <- list(spec$observed_names, spec$observed_names)
+
+  list(
+    par = out[seq_len(q)],
+    se = out[q + seq_len(q)],
+    implied = implied,
+    objective = out[2L * q + obs_n * obs_n + 1L],
+    converged = isTRUE(out[2L * q + obs_n * obs_n + 2L] == 1),
+    iterations = as.integer(out[2L * q + obs_n * obs_n + 3L])
+  )
+}
+
 .get_S_Full <- function(n_phenotypes, S_LD, varSNP, beta_SNP, TWAS, i) {
   if (.genomicssem_use_rust()) {
     S_Full <- .Call(

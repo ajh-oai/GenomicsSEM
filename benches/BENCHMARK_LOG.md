@@ -441,3 +441,87 @@ Interpretation:
 
 - Removing startup lavaan reduced the Rust-backed `Q_SNP=TRUE` benchmark from `1.170s -> 0.916s` single-core and `0.545s -> 0.318s` on 4 cores.
 - This mostly removes fixed overhead, so its relative impact is largest for smaller SNP batches and interactive checks.
+
+## 2026-04-24 01:40 PDT - Experimental Rust userGWAS per-SNP SEM fit
+
+Change set:
+
+- Added a generic Rust RAM-matrix SEM solver using numeric deltas and the same sandwich covariance calculation used by the R/lavaan path.
+- Added `.sem_fast_compile()` to compile lavaan's setup parameter table into fixed/free RAM matrices.
+- Added `.sem_fit_fast()` and `options(GenomicSEM.fast_usergwas_fit=TRUE)`.
+- `userGWAS()` now uses the Rust solver inside the SNP loop for supported DWLS parameter-table models. Unsupported syntax still falls back to lavaan.
+- Added `tests/usergwas-fast-fit.R`, covering the supported fixed-measurement one-factor fixture with both `Q_SNP=FALSE` and `Q_SNP=TRUE`.
+
+Validation:
+
+```sh
+R CMD INSTALL --install-tests .
+Rscript tests/usergwas-fast-fit.R
+```
+
+100-SNP/12-trait parity result, `Q_SNP=FALSE`:
+
+| field | max_abs_diff |
+|---|---:|
+| est | 1.369266e-07 |
+| SE | 1.210305e-09 |
+| Z_Estimate | 2.737585e-04 |
+| Pval_Estimate | 6.608180e-06 |
+| chisq | 5.307908e-07 |
+| chisq_pval | 1.110223e-16 |
+| AIC | 5.307908e-07 |
+
+100-SNP/12-trait parity result, `Q_SNP=TRUE`:
+
+| field | max_abs_diff |
+|---|---:|
+| est | 1.369266e-07 |
+| SE | 1.210305e-09 |
+| chisq | 5.307908e-07 |
+| Q_SNP | 5.307970e-07 |
+| Q_SNP_pval | 1.685171e-09 |
+
+Fast-path fallback count in both checks: 0 nonzero warning rows.
+
+Benchmark command, `Q_SNP=FALSE`:
+
+```sh
+Rscript benches/bench_usergwas_synthetic.R 100 12 1,4 userGWAS 1 TRUE FALSE TRUE FALSE FALSE FALSE,TRUE
+```
+
+Results:
+
+| backend | cores | Q_SNP | fast_usergwas_fit | elapsed_sec | checksum |
+|---|---:|---|---|---:|---:|
+| old_r_workflow | 1 | FALSE | FALSE | 10.539 | 823014.4 |
+| old_r_workflow | 4 | FALSE | FALSE | 2.930 | 823014.4 |
+| rust_binding_workflow | 1 | FALSE | FALSE | 10.406 | 823014.4 |
+| rust_binding_workflow | 4 | FALSE | FALSE | 2.882 | 823014.4 |
+| old_r_workflow | 1 | FALSE | TRUE | 10.537 | 823014.4 |
+| old_r_workflow | 4 | FALSE | TRUE | 2.966 | 823014.4 |
+| rust_binding_workflow | 1 | FALSE | TRUE | 0.758 | 823014.4 |
+| rust_binding_workflow | 4 | FALSE | TRUE | 0.535 | 823014.4 |
+
+Benchmark command, `Q_SNP=TRUE`:
+
+```sh
+Rscript benches/bench_usergwas_synthetic.R 100 12 1,4 userGWAS 1 TRUE FALSE TRUE TRUE FALSE FALSE,TRUE
+```
+
+Results:
+
+| backend | cores | Q_SNP | fast_usergwas_fit | elapsed_sec | checksum |
+|---|---:|---|---|---:|---:|
+| old_r_workflow | 1 | TRUE | FALSE | 10.582 | 824321.7 |
+| old_r_workflow | 4 | TRUE | FALSE | 2.915 | 824321.7 |
+| rust_binding_workflow | 1 | TRUE | FALSE | 9.894 | 824321.7 |
+| rust_binding_workflow | 4 | TRUE | FALSE | 2.877 | 824321.7 |
+| old_r_workflow | 1 | TRUE | TRUE | 11.182 | 824321.7 |
+| old_r_workflow | 4 | TRUE | TRUE | 3.091 | 824321.7 |
+| rust_binding_workflow | 1 | TRUE | TRUE | 0.789 | 824321.7 |
+| rust_binding_workflow | 4 | TRUE | TRUE | 0.503 | 824321.7 |
+
+Interpretation:
+
+- This removes the dominant per-SNP lavaan cost for supported `userGWAS()` DWLS models: `10.406s -> 0.758s` single-core with `Q_SNP=FALSE`, and `9.894s -> 0.789s` with `Q_SNP=TRUE` on this benchmark.
+- The current implementation still uses lavaan once up front to build the parameter table. Removing that remaining setup dependency would require parsing lavaan syntax and reproducing lavaan parameter-table defaults directly.

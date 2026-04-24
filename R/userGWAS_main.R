@@ -1,6 +1,7 @@
 .userGWAS_main <- function(i, cores, k, n, I_LD, V_LD, S_LD, std.lv, varSNPSE2, order, SNPs, beta_SNP, SE_SNP,
                            varSNP, GC, coords, smooth_check, TWAS, printwarn, toler, estimation, sub, Model1,
-                           df, npar, utilfuncs=NULL, basemodel=NULL, returnlavmodel=FALSE,Q_SNP,model) {
+                           df, npar, utilfuncs=NULL, basemodel=NULL, returnlavmodel=FALSE,Q_SNP,model,
+                           fast_fit_spec=NULL) {
   # utilfuncs contains utility functions to enable this code to work on PSOC clusters (for Windows)
   if (!is.null(utilfuncs)) {
     for (j in names(utilfuncs)) {
@@ -44,6 +45,142 @@
       Z_smooth <- max(abs(Z_smooth-Z_pre))
     }else{
       Z_smooth <- 0
+    }
+  }
+
+  if(estimation == "DWLS" && !returnlavmodel && isTRUE(getOption("GenomicSEM.fast_usergwas_fit", FALSE)) &&
+     !is.null(fast_fit_spec) && isTRUE(fast_fit_spec$supported)){
+    fast_fit <- .sem_fit_fast(
+      S_Fullrun,
+      V_full_Reorder,
+      diag(W),
+      fast_fit_spec,
+      max_iter = getOption("GenomicSEM.fast_usergwas_max_iter", 100L),
+      tol = getOption("GenomicSEM.fast_usergwas_tol", 1e-10)
+    )
+
+    if(!is.null(fast_fit) && isTRUE(fast_fit$converged) && all(is.finite(fast_fit$par)) && all(is.finite(fast_fit$se))){
+      Model_Output <- fast_fit_spec$ptable
+      free_fast <- as.integer(Model_Output$free_fast)
+      free_rows <- free_fast > 0L
+      Model_Output$est[free_rows] <- fast_fit$par[free_fast[free_rows]]
+
+      SE <- rep(NA_real_, nrow(Model_Output))
+      SE[free_rows] <- fast_fit$se[free_fast[free_rows]]
+
+      Eig <- as.matrix(eigen(V_full)$values)
+      Eig2 <- .diag_inverse_from_values(Eig, toler=toler)
+      P1 <- eigen(V_full)$vectors
+      implied2 <- S_Fullrun - fast_fit$implied[colnames(S_Fullrun), colnames(S_Fullrun)]
+      eta <- as.vector(lowerTriangle(implied2,diag=TRUE))
+      Q <- as.numeric(t(eta)%*%P1%*%Eig2%*%t(P1)%*%eta)
+
+      if(Q_SNP){
+        lv <- fast_fit_spec$latent_names
+        lines_SNP <- strsplit(model, "\n")[[1]]
+        lines_SNP <- str_replace_all(lines_SNP, fixed(" "), "")
+        if(TWAS){
+          lines_SNP <- lines_SNP[grepl("Gene", lines_SNP)]
+        }else{
+          lines_SNP <- lines_SNP[grepl("SNP", lines_SNP)]
+        }
+        lv <- lv[lv %in% gsub(" ~.*|~.*", "", lines_SNP)]
+        colnames(V_SNP) <- colnames(S_LD)
+        rownames(V_SNP) <- colnames(V_SNP)
+        Q_SNP_result <- vector()
+        Q_SNP_df <- vector()
+
+        if(length(lv) > 0){
+          for(b in 1:length(lv)){
+            indicators <- subset(Model_Output$rhs, Model_Output$lhs == lv[b] & Model_Output$op == "=~")
+            if(indicators[1] %in% colnames(V_SNP)){
+              V_SNP_i <- V_SNP[indicators,indicators]
+              Eig <- as.matrix(eigen(V_SNP_i)$values)
+              Eig2 <- .diag_inverse_from_values(Eig, toler=toler)
+              P1 <- eigen(V_SNP_i)$vectors
+              eta <- as.vector(implied2[1,indicators])
+              Q_SNP_result[b] <- as.numeric(t(eta)%*%P1%*%Eig2%*%t(P1)%*%eta)
+              Q_SNP_df[b] <- length(indicators)-1
+            }else{
+              Q_SNP_result[b] <- NA
+              Q_SNP_df[b] <- length(indicators)-1
+            }
+          }
+        }
+      }
+
+      unstand <- subset(Model_Output, Model_Output$plabel != "" & Model_Output$free > 0)[,c("lhs","op","rhs","free","label","est")]
+      unstand2 <- cbind(unstand, SE[Model_Output$plabel != "" & Model_Output$free > 0])
+      colnames(unstand2)[7] <- "SE"
+
+      other <- subset(Model_Output, (Model_Output$plabel == "" & Model_Output$op != ":=") | (Model_Output$free == 0 & Model_Output$plabel != ""))[,c("lhs","op","rhs","free","label","est")]
+      other$SE <- rep(NA, nrow(other))
+
+      if(nrow(other) > 0){
+        final <- rbind(unstand2,other)
+      }else{
+        final <- unstand2
+      }
+
+      final$index <- as.numeric(row.names(final))
+      final <- final[order(final$index), ]
+      final$index <- NULL
+
+      if(class(final$SE) != "factor"){
+        final$Z_Estimate <- final$est/final$SE
+        final$Pval_Estimate <- 2*pnorm(abs(final$Z_Estimate),lower.tail=FALSE)
+      }else{
+        final$SE <- as.character(final$SE)
+        final$Z_Estimate <- NA
+        final$Pval_Estimate <- NA
+      }
+
+      if(!(is.na(Q))){
+        final$chisq <- rep(Q,nrow(final))
+        final$chisq_df <- df
+        final$chisq_pval <- pchisq(final$chisq,final$chisq_df,lower.tail=FALSE)
+        final$AIC <- rep(Q + 2*npar,nrow(final))
+      }else{
+        final$chisq <- rep(NA, nrow(final))
+        final$chisq_df <- rep(NA,nrow(final))
+        final$chisq_pval <- rep(NA,nrow(final))
+        final$AIC <- rep(NA, nrow(final))
+      }
+
+      if(Q_SNP){
+        final$Q_SNP <- rep(NA,nrow(final))
+        final$Q_SNP_df <- rep(NA,nrow(final))
+        final$Q_SNP_pval <- rep(NA,nrow(final))
+        if(length(lv) > 0){
+          for(r in 1:nrow(final)){
+            for(h in 1:length(lv)){
+              if(final$lhs[r] == lv[h] & ((final$rhs[r] == "Gene" & TWAS) | (final$rhs[r] == "SNP" & !TWAS))) {
+                final$Q_SNP[r] <- Q_SNP_result[h]
+                final$Q_SNP_df[r] <- Q_SNP_df[h]
+                final$Q_SNP_pval[r] <- pchisq(final$Q_SNP[r],final$Q_SNP_df[r],lower.tail=FALSE)
+              }
+            }
+          }
+        }
+      }
+
+      if(printwarn){
+        final$error <- 0
+        final$warning <- 0
+      }
+
+      final2 <- cbind(n + (i-1) * cores,SNPs[i,],final,row.names=NULL)
+      colnames(final2)[1] <- "i"
+      if(smooth_check){
+        final2 <- cbind(final2,Z_smooth)
+      }
+      final2 <- subset(final2, final2$op != "da")
+      if(!(sub[[1]])==FALSE){
+        final2 <- subset(final2, paste0(final2$lhs, final2$op, final2$rhs, sep = "") %in% sub)
+      }else{
+        final2$est <- ifelse(final2$op == "<" | final2$op == ">" | final2$op == ">=" | final2$op == "<=", final2$est == NA, final2$est)
+      }
+      return(final2)
     }
   }
   

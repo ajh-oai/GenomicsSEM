@@ -33,6 +33,11 @@ fast_commonfactor_modes <- if (length(args) >= 10) {
 } else {
   "FALSE"
 }
+fast_usergwas_modes <- if (length(args) >= 11) {
+  strsplit(args[[11]], ",", fixed = TRUE)[[1]]
+} else {
+  "FALSE"
+}
 
 cores <- sort(unique(cores[cores > 0]))
 workflow <- match.arg(workflow, c("userGWAS", "commonfactorGWAS"))
@@ -41,10 +46,11 @@ fast_wls_modes <- fast_wls_modes %in% c("TRUE", "true", "1", "yes", "fast")
 printwarn_modes <- printwarn_modes %in% c("TRUE", "true", "1", "yes", "warn")
 q_snp_modes <- q_snp_modes %in% c("TRUE", "true", "1", "yes", "q")
 fast_commonfactor_modes <- fast_commonfactor_modes %in% c("TRUE", "true", "1", "yes", "fast")
+fast_usergwas_modes <- fast_usergwas_modes %in% c("TRUE", "true", "1", "yes", "fast")
 if (workflow == "commonfactorGWAS") {
   printwarn_modes <- NA
+  fast_usergwas_modes <- NA
 } else {
-  q_snp_modes <- NA
   fast_commonfactor_modes <- NA
 }
 
@@ -60,11 +66,12 @@ if (requireNamespace("GenomicSEM", quietly = TRUE)) {
 source("benches/synthetic_inputs.R")
 inputs <- make_synthetic_genomicsem_inputs(n_snp = n_snp, k = k, seed = seed)
 
-run_workflow <- function(use_rust, n_core, fast_diag, fast_wls, printwarn, q_snp, fast_commonfactor) {
+run_workflow <- function(use_rust, n_core, fast_diag, fast_wls, printwarn, q_snp, fast_commonfactor, fast_usergwas) {
   options(GenomicSEM.use_rust = use_rust)
   options(GenomicSEM.fast_diag_inverse = fast_diag)
   options(GenomicSEM.fast_diagonal_wls = fast_wls)
   options(GenomicSEM.fast_commonfactor_fit = fast_commonfactor)
+  options(GenomicSEM.fast_usergwas_fit = fast_usergwas)
 
   parallel <- n_core > 1L
   result <- NULL
@@ -82,7 +89,7 @@ run_workflow <- function(use_rust, n_core, fast_diag, fast_wls, printwarn, q_snp
           cores = if (parallel) n_core else NULL,
           GC = "standard",
           fix_measurement = TRUE,
-          Q_SNP = FALSE,
+          Q_SNP = q_snp,
           printwarn = printwarn
         )
       } else {
@@ -108,8 +115,9 @@ run_workflow <- function(use_rust, n_core, fast_diag, fast_wls, printwarn, q_snp
     fast_diag_inverse = fast_diag,
     fast_diagonal_wls = fast_wls,
     printwarn = if (workflow == "userGWAS") printwarn else NA,
-    Q_SNP = if (workflow == "commonfactorGWAS") q_snp else NA,
+    Q_SNP = q_snp,
     fast_commonfactor_fit = if (workflow == "commonfactorGWAS") fast_commonfactor else NA,
+    fast_usergwas_fit = if (workflow == "userGWAS") fast_usergwas else NA,
     n_snp = n_snp,
     k = k,
     elapsed_sec = elapsed,
@@ -129,13 +137,15 @@ results <- do.call(
       do.call(rbind, lapply(printwarn_modes, function(printwarn) {
         do.call(rbind, lapply(q_snp_modes, function(q_snp) {
           do.call(rbind, lapply(fast_commonfactor_modes, function(fast_commonfactor) {
-            do.call(
-              rbind,
-              c(
-                lapply(cores, function(n_core) run_workflow(FALSE, n_core, fast_diag, fast_wls, printwarn, q_snp, fast_commonfactor)),
-                lapply(cores, function(n_core) run_workflow(TRUE, n_core, fast_diag, fast_wls, printwarn, q_snp, fast_commonfactor))
+            do.call(rbind, lapply(fast_usergwas_modes, function(fast_usergwas) {
+              do.call(
+                rbind,
+                c(
+                  lapply(cores, function(n_core) run_workflow(FALSE, n_core, fast_diag, fast_wls, printwarn, q_snp, fast_commonfactor, fast_usergwas)),
+                  lapply(cores, function(n_core) run_workflow(TRUE, n_core, fast_diag, fast_wls, printwarn, q_snp, fast_commonfactor, fast_usergwas))
+                )
               )
-            )
+            }))
           }))
         }))
       }))

@@ -52,6 +52,19 @@ extern SEXP genomicssem_fit_commonfactor_q_call(
     SEXP start_,
     SEXP max_iter_,
     SEXP tol_);
+extern SEXP genomicssem_fit_generic_sem_call(
+    SEXP obs_n_,
+    SEXP total_n_,
+    SEXP s_full_,
+    SEXP v_full_reorder_,
+    SEXP w_diag_,
+    SEXP b_fixed_,
+    SEXP psi_fixed_,
+    SEXP b_free_,
+    SEXP psi_free_,
+    SEXP start_,
+    SEXP max_iter_,
+    SEXP tol_);
 
 static const R_CallMethodDef CallEntries[] = {
     {"genomicssem_get_v_snp_call", (DL_FUNC)&genomicssem_get_v_snp_call, 7},
@@ -61,6 +74,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"genomicssem_get_z_pre_call", (DL_FUNC)&genomicssem_get_z_pre_call, 5},
     {"genomicssem_fit_commonfactor_main_call", (DL_FUNC)&genomicssem_fit_commonfactor_main_call, 7},
     {"genomicssem_fit_commonfactor_q_call", (DL_FUNC)&genomicssem_fit_commonfactor_q_call, 8},
+    {"genomicssem_fit_generic_sem_call", (DL_FUNC)&genomicssem_fit_generic_sem_call, 12},
     {NULL, NULL, 0}
 };
 

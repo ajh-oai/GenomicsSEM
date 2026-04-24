@@ -116,4 +116,30 @@ int genomicssem_fit_commonfactor_q(
     double *out,
     size_t out_len);
 
+int genomicssem_fit_generic_sem(
+    size_t obs_n,
+    size_t total_n,
+    const double *s_full,
+    size_t s_nrow,
+    size_t s_ncol,
+    const double *v_full_reorder,
+    size_t v_nrow,
+    size_t v_ncol,
+    const double *w_diag,
+    size_t w_len,
+    const double *b_fixed,
+    size_t b_fixed_len,
+    const double *psi_fixed,
+    size_t psi_fixed_len,
+    const int *b_free,
+    size_t b_free_len,
+    const int *psi_free,
+    size_t psi_free_len,
+    const double *start,
+    size_t start_len,
+    size_t max_iter,
+    double tol,
+    double *out,
+    size_t out_len);
+
 #endif

@@ -2,7 +2,7 @@
 
 use genomicssem_core::{
     fill_s_full, fill_v_full, fill_v_snp, fill_v_snp_batch, fill_z_pre, fit_commonfactor_main,
-    fit_commonfactor_q, GenomicControl, KernelError,
+    fit_commonfactor_q, fit_generic_sem, GenomicControl, KernelError,
 };
 use std::slice;
 
@@ -321,6 +321,68 @@ pub unsafe extern "C" fn genomicssem_fit_commonfactor_q(
             v_ncol,
             w_diag,
             fixed,
+            start,
+            max_iter,
+            tol,
+            out,
+        )
+    })();
+
+    result.map(|()| OK).unwrap_or_else(code)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn genomicssem_fit_generic_sem(
+    obs_n: usize,
+    total_n: usize,
+    s_full: *const f64,
+    s_nrow: usize,
+    s_ncol: usize,
+    v_full_reorder: *const f64,
+    v_nrow: usize,
+    v_ncol: usize,
+    w_diag: *const f64,
+    w_len: usize,
+    b_fixed: *const f64,
+    b_fixed_len: usize,
+    psi_fixed: *const f64,
+    psi_fixed_len: usize,
+    b_free: *const i32,
+    b_free_len: usize,
+    psi_free: *const i32,
+    psi_free_len: usize,
+    start: *const f64,
+    start_len: usize,
+    max_iter: usize,
+    tol: f64,
+    out: *mut f64,
+    out_len: usize,
+) -> i32 {
+    let result = (|| {
+        let s_full = checked_slice(s_full, s_nrow * s_ncol)?;
+        let v_full_reorder = checked_slice(v_full_reorder, v_nrow * v_ncol)?;
+        let w_diag = checked_slice(w_diag, w_len)?;
+        let b_fixed = checked_slice(b_fixed, b_fixed_len)?;
+        let psi_fixed = checked_slice(psi_fixed, psi_fixed_len)?;
+        let b_free = checked_slice(b_free, b_free_len)?;
+        let psi_free = checked_slice(psi_free, psi_free_len)?;
+        let start = checked_slice(start, start_len)?;
+        let out = checked_slice_mut(out, out_len)?;
+
+        fit_generic_sem(
+            obs_n,
+            total_n,
+            s_full,
+            s_nrow,
+            s_ncol,
+            v_full_reorder,
+            v_nrow,
+            v_ncol,
+            w_diag,
+            b_fixed,
+            psi_fixed,
+            b_free,
+            psi_free,
             start,
             max_iter,
             tol,

@@ -473,3 +473,78 @@ SEXP genomicssem_fit_commonfactor_q_call(
   UNPROTECT(nprotect);
   return out;
 }
+
+SEXP genomicssem_fit_generic_sem_call(
+    SEXP obs_n_,
+    SEXP total_n_,
+    SEXP s_full_,
+    SEXP v_full_reorder_,
+    SEXP w_diag_,
+    SEXP b_fixed_,
+    SEXP psi_fixed_,
+    SEXP b_free_,
+    SEXP psi_free_,
+    SEXP start_,
+    SEXP max_iter_,
+    SEXP tol_) {
+  int nprotect = 0;
+  SEXP s_full = protect_real_matrix(s_full_, "S_Fullrun", &nprotect);
+  SEXP v_full_reorder = protect_real_matrix(v_full_reorder_, "V_Full_Reorder", &nprotect);
+  SEXP w_diag = protect_real_vector(w_diag_, "W_diag", &nprotect);
+  SEXP b_fixed = protect_real_matrix(b_fixed_, "B_fixed", &nprotect);
+  SEXP psi_fixed = protect_real_matrix(psi_fixed_, "Psi_fixed", &nprotect);
+  SEXP b_free = protect_int_matrix(b_free_, "B_free", &nprotect);
+  SEXP psi_free = protect_int_matrix(psi_free_, "Psi_free", &nprotect);
+  SEXP start = protect_real_vector(start_, "start", &nprotect);
+
+  size_t s_nrow, s_ncol, v_nrow, v_ncol, b_nrow, b_ncol, psi_nrow, psi_ncol;
+  size_t b_free_nrow, b_free_ncol, psi_free_nrow, psi_free_ncol;
+  matrix_dims(s_full, "S_Fullrun", &s_nrow, &s_ncol);
+  matrix_dims(v_full_reorder, "V_Full_Reorder", &v_nrow, &v_ncol);
+  matrix_dims(b_fixed, "B_fixed", &b_nrow, &b_ncol);
+  matrix_dims(psi_fixed, "Psi_fixed", &psi_nrow, &psi_ncol);
+  matrix_dims(b_free, "B_free", &b_free_nrow, &b_free_ncol);
+  matrix_dims(psi_free, "Psi_free", &psi_free_nrow, &psi_free_ncol);
+
+  int obs_n_int = scalar_int(obs_n_, "obs_n");
+  int total_n_int = scalar_int(total_n_, "total_n");
+  int max_iter_int = scalar_int(max_iter_, "max_iter");
+  if (obs_n_int <= 0 || total_n_int <= 0 || max_iter_int <= 0) {
+    Rf_error("'obs_n', 'total_n', and 'max_iter' must be positive");
+  }
+
+  size_t q = (size_t)XLENGTH(start);
+  size_t out_len = 2 * q + (size_t)obs_n_int * (size_t)obs_n_int + 3;
+  SEXP out = PROTECT(Rf_allocVector(REALSXP, (R_xlen_t)out_len));
+  ++nprotect;
+
+  int status = genomicssem_fit_generic_sem(
+      (size_t)obs_n_int,
+      (size_t)total_n_int,
+      REAL(s_full),
+      s_nrow,
+      s_ncol,
+      REAL(v_full_reorder),
+      v_nrow,
+      v_ncol,
+      REAL(w_diag),
+      (size_t)XLENGTH(w_diag),
+      REAL(b_fixed),
+      (size_t)XLENGTH(b_fixed),
+      REAL(psi_fixed),
+      (size_t)XLENGTH(psi_fixed),
+      INTEGER(b_free),
+      (size_t)XLENGTH(b_free),
+      INTEGER(psi_free),
+      (size_t)XLENGTH(psi_free),
+      REAL(start),
+      q,
+      (size_t)max_iter_int,
+      scalar_real(tol_, "tol"),
+      REAL(out),
+      out_len);
+
+  check_status(status, "genomicssem_fit_generic_sem");
+  UNPROTECT(nprotect);
+  return out;
+}

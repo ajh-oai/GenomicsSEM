@@ -238,6 +238,10 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
   # Run a single SNP to obtain base Lavaan model object
   LavModel1 <- .userGWAS_main(i=1, cores=1, n_phenotypes, n=1, I_LD, V_LD, S_LD, std.lv, varSNPSE2, order, SNPs, beta_SNP, SE_SNP, varSNP, GC,
                               coords, smooth_check, TWAS, printwarn, toler, estimation, sub, Model1, df, npar, returnlavmodel=TRUE,Q_SNP=Q_SNP,model=model)
+  fast_fit_spec <- NULL
+  if(estimation == "DWLS" && isTRUE(getOption("GenomicSEM.fast_usergwas_fit", FALSE))){
+    fast_fit_spec <- .sem_fast_compile(parTable(LavModel1), rownames(inspect(LavModel1)[[1]]))
+  }
   if(!parallel){
     #make empty list object for model results if not saving specific model parameter
     if(sub[[1]]==FALSE){
@@ -259,7 +263,8 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
         }
       }
       final2 <- .userGWAS_main(i, cores=1, n_phenotypes, 1, I_LD, V_LD, S_LD, std.lv, varSNPSE2, order, SNPs, beta_SNP, SE_SNP, varSNP, GC,
-                               coords, smooth_check, TWAS, printwarn, toler, estimation, sub, Model1, df, npar, basemodel=LavModel1,Q_SNP=Q_SNP,model=model)
+                               coords, smooth_check, TWAS, printwarn, toler, estimation, sub, Model1, df, npar, basemodel=LavModel1,Q_SNP=Q_SNP,model=model,
+                               fast_fit_spec=fast_fit_spec)
       final2$i <- NULL
       if(sub[[1]] != FALSE){
         final3 <- as.data.frame(matrix(NA,ncol=ncol(final2),nrow=length(sub)))
@@ -326,7 +331,8 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
         foreach (i=1:nrow(beta_SNP[[n]]), .combine='rbind', .packages = "lavaan") %dopar% 
         .userGWAS_main(i, int, n_phenotypes, n, I_LD, V_LD, S_LD,
                        std.lv, varSNPSE2, order, SNPs[[n]], beta_SNP[[n]], SE_SNP[[n]], varSNP[[n]], GC,
-                       coords, smooth_check, TWAS, printwarn, toler, estimation, sub, Model1, df, npar, basemodel=LavModel1,Q_SNP=Q_SNP,model=model)
+                       coords, smooth_check, TWAS, printwarn, toler, estimation, sub, Model1, df, npar, basemodel=LavModel1,Q_SNP=Q_SNP,model=model,
+                       fast_fit_spec=fast_fit_spec)
     } else {
       #Util-functions have to be explicitly passed to the analysis function in PSOCK cluster
       utilfuncs <- list()
@@ -335,13 +341,15 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
       utilfuncs[[".get_Z_pre"]] <- .get_Z_pre
       utilfuncs[[".get_V_full"]] <- .get_V_full
       utilfuncs[[".diag_inverse_from_values"]] <- .diag_inverse_from_values
+      utilfuncs[[".sem_fit_fast"]] <- .sem_fit_fast
       results <- foreach(n = icount(int), .combine = 'rbind') %:%
         foreach (i=1:nrow(beta_SNP[[n]]), .combine='rbind', .packages = c("lavaan", "gdata"),
                  .export=c(".userGWAS_main")) %dopar% {
                    .userGWAS_main(i, int, n_phenotypes, n, I_LD, V_LD, S_LD, std.lv, varSNPSE2, order,
-                                  SNPs[[n]], beta_SNP[[n]], SE_SNP[[n]], varSNP[[n]], GC, coords,
-                                  smooth_check, TWAS, printwarn, toler, estimation, sub, Model1,
-                                  df, npar, utilfuncs, basemodel=LavModel1,Q_SNP=Q_SNP,model=model)
+                                   SNPs[[n]], beta_SNP[[n]], SE_SNP[[n]], varSNP[[n]], GC, coords,
+                                   smooth_check, TWAS, printwarn, toler, estimation, sub, Model1,
+                                  df, npar, utilfuncs, basemodel=LavModel1,Q_SNP=Q_SNP,model=model,
+                                  fast_fit_spec=fast_fit_spec)
                  }
     }
     

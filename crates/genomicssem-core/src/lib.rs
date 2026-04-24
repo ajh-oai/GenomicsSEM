@@ -240,6 +240,159 @@ fn vech_from_matrix_col_major(matrix: &[f64], n: usize, out: &mut [f64]) {
     }
 }
 
+fn generic_sem_implied(
+    obs_n: usize,
+    total_n: usize,
+    b_fixed_col_major: &[f64],
+    psi_fixed_col_major: &[f64],
+    b_free_col_major: &[i32],
+    psi_free_col_major: &[i32],
+    p: &[f64],
+    sigma_vech: &mut [f64],
+    sigma_obs_col_major: Option<&mut [f64]>,
+) -> KernelResult<()> {
+    let q = p.len();
+    let total_sq = total_n * total_n;
+    if obs_n == 0
+        || obs_n > total_n
+        || b_fixed_col_major.len() != total_sq
+        || psi_fixed_col_major.len() != total_sq
+        || b_free_col_major.len() != total_sq
+        || psi_free_col_major.len() != total_sq
+        || sigma_vech.len() != obs_n * (obs_n + 1) / 2
+    {
+        return Err(KernelError::BadDimensions);
+    }
+
+    let mut b = vec![0.0; total_sq];
+    let mut psi = vec![0.0; total_sq];
+    for col in 0..total_n {
+        for row in 0..total_n {
+            let source = idx(row, col, total_n);
+            let dest = ridx(row, col, total_n);
+
+            let b_free = b_free_col_major[source];
+            b[dest] = if b_free > 0 {
+                let p_idx = (b_free - 1) as usize;
+                if p_idx >= q {
+                    return Err(KernelError::BadIndex);
+                }
+                p[p_idx]
+            } else {
+                b_fixed_col_major[source]
+            };
+
+            let psi_free = psi_free_col_major[source];
+            psi[dest] = if psi_free > 0 {
+                let p_idx = (psi_free - 1) as usize;
+                if p_idx >= q {
+                    return Err(KernelError::BadIndex);
+                }
+                p[p_idx]
+            } else {
+                psi_fixed_col_major[source]
+            };
+        }
+    }
+
+    let mut a = vec![0.0; total_sq];
+    for row in 0..total_n {
+        for col in 0..total_n {
+            a[ridx(row, col, total_n)] = if row == col { 1.0 } else { 0.0 }
+                - b[ridx(row, col, total_n)];
+        }
+    }
+
+    let inv_a = invert_matrix(&a, total_n)?;
+
+    let mut tmp = vec![0.0; total_sq];
+    for row in 0..total_n {
+        for col in 0..total_n {
+            let mut sum = 0.0;
+            for mid in 0..total_n {
+                sum += inv_a[ridx(row, mid, total_n)] * psi[ridx(mid, col, total_n)];
+            }
+            tmp[ridx(row, col, total_n)] = sum;
+        }
+    }
+
+    let mut cov = vec![0.0; total_sq];
+    for row in 0..total_n {
+        for col in 0..total_n {
+            let mut sum = 0.0;
+            for mid in 0..total_n {
+                sum += tmp[ridx(row, mid, total_n)] * inv_a[ridx(col, mid, total_n)];
+            }
+            cov[ridx(row, col, total_n)] = sum;
+        }
+    }
+
+    let mut out_i = 0;
+    for col in 0..obs_n {
+        for row in col..obs_n {
+            sigma_vech[out_i] = cov[ridx(row, col, total_n)];
+            out_i += 1;
+        }
+    }
+
+    if let Some(out) = sigma_obs_col_major {
+        if out.len() != obs_n * obs_n {
+            return Err(KernelError::BadDimensions);
+        }
+        for col in 0..obs_n {
+            for row in 0..obs_n {
+                out[idx(row, col, obs_n)] = cov[ridx(row, col, total_n)];
+            }
+        }
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn generic_sem_delta_numeric(
+    obs_n: usize,
+    total_n: usize,
+    b_fixed: &[f64],
+    psi_fixed: &[f64],
+    b_free: &[i32],
+    psi_free: &[i32],
+    p: &[f64],
+    sigma: &[f64],
+    delta: &mut [f64],
+) -> KernelResult<()> {
+    let m = obs_n * (obs_n + 1) / 2;
+    let q = p.len();
+    if sigma.len() != m || delta.len() != m * q {
+        return Err(KernelError::BadDimensions);
+    }
+
+    let mut p_step = p.to_vec();
+    let mut sigma_step = vec![0.0; m];
+    for param in 0..q {
+        let step = 1.0e-6 * (1.0 + p[param].abs());
+        p_step[param] = p[param] + step;
+        generic_sem_implied(
+            obs_n,
+            total_n,
+            b_fixed,
+            psi_fixed,
+            b_free,
+            psi_free,
+            &p_step,
+            &mut sigma_step,
+            None,
+        )?;
+
+        for row in 0..m {
+            delta[ridx(row, param, q)] = (sigma_step[row] - sigma[row]) / step;
+        }
+        p_step[param] = p[param];
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn fit_commonfactor_main(
     k: usize,
@@ -617,6 +770,239 @@ pub fn fit_commonfactor_q(
     out[q + k * k] = obj;
     out[q + k * k + 1] = if converged { 1.0 } else { 0.0 };
     out[q + k * k + 2] = iterations as f64;
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fit_generic_sem(
+    obs_n: usize,
+    total_n: usize,
+    s_full: &[f64],
+    s_nrow: usize,
+    s_ncol: usize,
+    v_full_reorder: &[f64],
+    v_nrow: usize,
+    v_ncol: usize,
+    w_diag: &[f64],
+    b_fixed: &[f64],
+    psi_fixed: &[f64],
+    b_free: &[i32],
+    psi_free: &[i32],
+    start: &[f64],
+    max_iter: usize,
+    tol: f64,
+    out: &mut [f64],
+) -> KernelResult<()> {
+    let m = obs_n * (obs_n + 1) / 2;
+    let q = start.len();
+    let out_len = 2 * q + obs_n * obs_n + 3;
+    let total_sq = total_n * total_n;
+
+    if obs_n == 0
+        || total_n < obs_n
+        || q == 0
+        || s_nrow != obs_n
+        || s_ncol != obs_n
+        || s_full.len() != obs_n * obs_n
+        || v_nrow != m
+        || v_ncol != m
+        || v_full_reorder.len() != m * m
+        || w_diag.len() != m
+        || b_fixed.len() != total_sq
+        || psi_fixed.len() != total_sq
+        || b_free.len() != total_sq
+        || psi_free.len() != total_sq
+        || out.len() != out_len
+    {
+        return Err(KernelError::BadDimensions);
+    }
+
+    let mut y = vec![0.0; m];
+    vech_from_matrix_col_major(s_full, obs_n, &mut y);
+
+    let mut p = start.to_vec();
+    let mut sigma = vec![0.0; m];
+    let mut delta = vec![0.0; m * q];
+    let mut converged = false;
+    let mut iterations = 0usize;
+
+    for iter in 0..max_iter {
+        iterations = iter + 1;
+        generic_sem_implied(
+            obs_n,
+            total_n,
+            b_fixed,
+            psi_fixed,
+            b_free,
+            psi_free,
+            &p,
+            &mut sigma,
+            None,
+        )?;
+        generic_sem_delta_numeric(
+            obs_n, total_n, b_fixed, psi_fixed, b_free, psi_free, &p, &sigma, &mut delta,
+        )?;
+
+        let mut residual = vec![0.0; m];
+        let mut obj = 0.0;
+        for r in 0..m {
+            residual[r] = y[r] - sigma[r];
+            obj += w_diag[r] * residual[r] * residual[r];
+        }
+
+        let mut a = vec![0.0; q * q];
+        let mut g = vec![0.0; q];
+        for row in 0..m {
+            let wr = w_diag[row] * residual[row];
+            let w = w_diag[row];
+            for col_p in 0..q {
+                let d_col = delta[ridx(row, col_p, q)];
+                g[col_p] += d_col * wr;
+                for row_p in 0..q {
+                    a[ridx(row_p, col_p, q)] += delta[ridx(row, row_p, q)] * w * d_col;
+                }
+            }
+        }
+
+        let step = solve_linear(&a, &g, q)?;
+        let mut max_scaled_step = 0.0_f64;
+        let mut alpha = 1.0_f64;
+        let mut accepted = false;
+        let mut candidate = p.clone();
+
+        for _ in 0..24 {
+            for j in 0..q {
+                candidate[j] = p[j] + alpha * step[j];
+            }
+
+            let mut sigma_candidate = vec![0.0; m];
+            generic_sem_implied(
+                obs_n,
+                total_n,
+                b_fixed,
+                psi_fixed,
+                b_free,
+                psi_free,
+                &candidate,
+                &mut sigma_candidate,
+                None,
+            )?;
+
+            let mut candidate_obj = 0.0;
+            for row in 0..m {
+                let r = y[row] - sigma_candidate[row];
+                candidate_obj += w_diag[row] * r * r;
+            }
+
+            if candidate_obj.is_finite() && candidate_obj <= obj {
+                accepted = true;
+                break;
+            }
+            alpha *= 0.5;
+        }
+
+        if !accepted {
+            alpha = 1.0e-4;
+            for j in 0..q {
+                candidate[j] = p[j] + alpha * step[j];
+            }
+        }
+
+        for j in 0..q {
+            let scaled = (alpha * step[j]).abs() / (1.0 + p[j].abs());
+            if scaled > max_scaled_step {
+                max_scaled_step = scaled;
+            }
+        }
+        p.copy_from_slice(&candidate);
+
+        if max_scaled_step < tol {
+            converged = true;
+            break;
+        }
+    }
+
+    let mut implied_obs = vec![0.0; obs_n * obs_n];
+    generic_sem_implied(
+        obs_n,
+        total_n,
+        b_fixed,
+        psi_fixed,
+        b_free,
+        psi_free,
+        &p,
+        &mut sigma,
+        Some(&mut implied_obs),
+    )?;
+    generic_sem_delta_numeric(
+        obs_n, total_n, b_fixed, psi_fixed, b_free, psi_free, &p, &sigma, &mut delta,
+    )?;
+
+    let mut obj = 0.0;
+    for row in 0..m {
+        let r = y[row] - sigma[row];
+        obj += w_diag[row] * r * r;
+    }
+
+    let mut a = vec![0.0; q * q];
+    for row in 0..m {
+        let w = w_diag[row];
+        for col_p in 0..q {
+            let d_col = delta[ridx(row, col_p, q)];
+            for row_p in 0..q {
+                a[ridx(row_p, col_p, q)] += delta[ridx(row, row_p, q)] * w * d_col;
+            }
+        }
+    }
+
+    let bread = invert_matrix(&a, q)?;
+
+    let mut meat = vec![0.0; q * q];
+    for a_col in 0..q {
+        for b_col in 0..q {
+            let mut sum = 0.0;
+            for r1 in 0..m {
+                let wr1 = w_diag[r1] * delta[ridx(r1, a_col, q)];
+                for r2 in 0..m {
+                    let wr2 = w_diag[r2] * delta[ridx(r2, b_col, q)];
+                    sum += wr1 * v_full_reorder[idx(r1, r2, m)] * wr2;
+                }
+            }
+            meat[ridx(a_col, b_col, q)] = sum;
+        }
+    }
+
+    let mut tmp = vec![0.0; q * q];
+    for row in 0..q {
+        for col in 0..q {
+            let mut sum = 0.0;
+            for mid in 0..q {
+                sum += bread[ridx(row, mid, q)] * meat[ridx(mid, col, q)];
+            }
+            tmp[ridx(row, col, q)] = sum;
+        }
+    }
+
+    let mut cov = vec![0.0; q * q];
+    for row in 0..q {
+        for col in 0..q {
+            let mut sum = 0.0;
+            for mid in 0..q {
+                sum += tmp[ridx(row, mid, q)] * bread[ridx(mid, col, q)];
+            }
+            cov[ridx(row, col, q)] = sum;
+        }
+    }
+
+    out[..q].copy_from_slice(&p);
+    for j in 0..q {
+        out[q + j] = cov[ridx(j, j, q)].max(0.0).sqrt();
+    }
+    out[(2 * q)..(2 * q + obs_n * obs_n)].copy_from_slice(&implied_obs);
+    out[2 * q + obs_n * obs_n] = obj;
+    out[2 * q + obs_n * obs_n + 1] = if converged { 1.0 } else { 0.0 };
+    out[2 * q + obs_n * obs_n + 2] = iterations as f64;
 
     Ok(())
 }
