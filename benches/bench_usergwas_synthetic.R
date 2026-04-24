@@ -49,6 +49,7 @@ fast_commonfactor_modes <- fast_commonfactor_modes %in% c("TRUE", "true", "1", "
 fast_usergwas_modes <- fast_usergwas_modes %in% c("TRUE", "true", "1", "yes", "fast")
 if (workflow == "commonfactorGWAS") {
   printwarn_modes <- NA
+  q_snp_modes <- NA
   fast_usergwas_modes <- NA
 } else {
   fast_commonfactor_modes <- NA
@@ -99,8 +100,7 @@ run_workflow <- function(use_rust, n_core, fast_diag, fast_wls, printwarn, q_snp
           estimation = "DWLS",
           parallel = parallel,
           cores = if (parallel) n_core else NULL,
-          GC = "standard",
-          Q_SNP = q_snp
+          GC = "standard"
         )
       }
     )
@@ -115,7 +115,7 @@ run_workflow <- function(use_rust, n_core, fast_diag, fast_wls, printwarn, q_snp
     fast_diag_inverse = fast_diag,
     fast_diagonal_wls = fast_wls,
     printwarn = if (workflow == "userGWAS") printwarn else NA,
-    Q_SNP = q_snp,
+    Q_SNP = if (workflow == "userGWAS") q_snp else NA,
     fast_commonfactor_fit = if (workflow == "commonfactorGWAS") fast_commonfactor else NA,
     fast_usergwas_fit = if (workflow == "userGWAS") fast_usergwas else NA,
     n_snp = n_snp,

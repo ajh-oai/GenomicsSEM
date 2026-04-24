@@ -1,6 +1,6 @@
 .commonfactorGWAS_main <- function(i, cores, n, S_LD, V_LD, I_LD, beta_SNP, SE_SNP, varSNP, varSNPSE2, GC, coords, k,
                                    smooth_check, Model1, toler, estimation, order, utilfuncs=NULL, basemodel=NULL, returnlavmodel=FALSE,
-                                   Q_SNP=TRUE, fast_fit_start=NULL) {
+                                   fast_fit_start=NULL) {
   if (!is.null(utilfuncs)) {
     for (j in names(utilfuncs)) {
       assign(j, utilfuncs[[j]], envir=environment())
@@ -94,47 +94,45 @@
       se_c <- fast_fit$se[k]
       Q <- NA
 
-      if(Q_SNP){
-        lambdas <- c(1, fast_fit$par[seq_len(k - 1L)])
-        b <- fast_fit$par[k]
-        theta <- fast_fit$par[k + seq_len(k)]
-        psi <- fast_fit$par[2L * k + 1L]
-        var_x <- fast_fit$par[2L * k + 2L]
+      lambdas <- c(1, fast_fit$par[seq_len(k - 1L)])
+      b <- fast_fit$par[k]
+      theta <- fast_fit$par[k + seq_len(k)]
+      psi <- fast_fit$par[2L * k + 1L]
+      var_x <- fast_fit$par[2L * k + 2L]
 
-        gamma_start <- (S_Fullrun[1, 2:(k + 1L)] - var_x * b * lambdas) / var_x
-        theta_start <- diag(S_Fullrun)[2:(k + 1L)] - lambdas^2 * psi - (lambdas * b + gamma_start)^2 * var_x
-        q_start <- c(gamma_start, theta_start)
-        if(!all(is.finite(q_start))){
-          q_start <- c(rep(0, k), theta)
-        }
-
-        q_fit <- .commonfactor_q_fit_fast(
-          S_Fullrun,
-          V_Full_Reorder,
-          diag(W),
-          c(lambdas, b, psi, var_x),
-          q_start,
-          k,
-          max_iter = getOption("GenomicSEM.fast_commonfactor_q_max_iter", 500L),
-          tol = getOption("GenomicSEM.fast_commonfactor_tol", 1e-10)
-        )
-
-        Q <- tryCatch({
-          if(is.null(q_fit) || !isTRUE(q_fit$converged) || !all(is.finite(q_fit$par)) || !all(is.finite(q_fit$gamma_cov))){
-            NULL
-          } else {
-            ev <- eigen(q_fit$gamma_cov)
-            eta <- cbind(q_fit$par[seq_len(k)])
-            as.numeric(t(eta) %*% ev$vectors %*% .diag_inverse_from_values(ev$values, toler=toler) %*% t(ev$vectors) %*% eta)
-          }
-        }, error = function(e) NULL)
-
-        if(is.null(Q) || !is.finite(Q)){
-          Q <- NA
-        }
+      gamma_start <- (S_Fullrun[1, 2:(k + 1L)] - var_x * b * lambdas) / var_x
+      theta_start <- diag(S_Fullrun)[2:(k + 1L)] - lambdas^2 * psi - (lambdas * b + gamma_start)^2 * var_x
+      q_start <- c(gamma_start, theta_start)
+      if(!all(is.finite(q_start))){
+        q_start <- c(rep(0, k), theta)
       }
 
-      if(Q_SNP && is.na(Q)){
+      q_fit <- .commonfactor_q_fit_fast(
+        S_Fullrun,
+        V_Full_Reorder,
+        diag(W),
+        c(lambdas, b, psi, var_x),
+        q_start,
+        k,
+        max_iter = getOption("GenomicSEM.fast_commonfactor_q_max_iter", 500L),
+        tol = getOption("GenomicSEM.fast_commonfactor_tol", 1e-10)
+      )
+
+      Q <- tryCatch({
+        if(is.null(q_fit) || !isTRUE(q_fit$converged) || !all(is.finite(q_fit$par)) || !all(is.finite(q_fit$gamma_cov))){
+          NULL
+        } else {
+          ev <- eigen(q_fit$gamma_cov)
+          eta <- cbind(q_fit$par[seq_len(k)])
+          as.numeric(t(eta) %*% ev$vectors %*% .diag_inverse_from_values(ev$values, toler=toler) %*% t(ev$vectors) %*% eta)
+        }
+      }, error = function(e) NULL)
+
+      if(is.null(Q) || !is.finite(Q)){
+        Q <- NA
+      }
+
+      if(is.na(Q)){
         # Fall back to the lavaan path below if the experimental Q solver cannot produce Q.
       } else {
         if(smooth_check){
@@ -203,10 +201,9 @@
     ##pull the corrected SE for SNP effect on P-factor
     se_c<-SE[k,1]
 
-    if(Q_SNP){
-      ##code to estimate Q_SNP##
-      #First pull the estimates from Step 1
-      ModelQ <- parTable(Model1_Results)
+    ##code to estimate Q_SNP##
+    #First pull the estimates from Step 1
+    ModelQ <- parTable(Model1_Results)
       
       #2023 add: remove additional rows for internal representation of model by lavaan
        ModelQ<-ModelQ[1:((k*3)+3),]
@@ -266,9 +263,6 @@
   
           #Combining all the pieces from above:
           Q<-t(eta)%*%P1%*%Eig%*%t(P1)%*%eta}} else{Q<-"Not Computed"}
-    }else{
-      Q <- NA
-    }
 
     model_list <- inspect(Model1_Results, "list")
     model_row <- data.frame(model_list[k+1, c("lhs", "op", "rhs", "est"), drop = FALSE], stringsAsFactors = FALSE)

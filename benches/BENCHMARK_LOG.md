@@ -565,3 +565,32 @@ Interpretation:
 
 - Removing the pre-loop basemodel lavaan fit mostly helps the parallel benchmark: `0.503s -> 0.366s` on 4 cores for `Q_SNP=TRUE`.
 - The setup path still calls lavaan to create the initial parameter table and variable ordering. Removing that final dependency would require a lavaan-syntax parser/parameter-table generator rather than a solver replacement.
+
+## 2026-04-24 02:07 PDT - Remove added commonfactorGWAS Q_SNP flag
+
+Change set:
+
+- Removed the public `commonfactorGWAS(..., Q_SNP=...)` argument that was added during the Rust fast-path work.
+- Restored upstream API behavior for `commonfactorGWAS()`: the SNP heterogeneity Q model is always computed.
+- Left the existing upstream `userGWAS(..., Q_SNP=...)` flag intact.
+- Updated common-factor tests and synthetic benchmark reporting so `Q_SNP` is treated as not applicable for `commonfactorGWAS()`.
+
+Validation:
+
+```sh
+R CMD INSTALL --install-tests .
+Rscript tests/commonfactor-fast-fit.R
+Rscript tests/commonfactor-qsnp.R
+Rscript tests/usergwas-fast-fit.R
+cargo test --workspace
+Rscript tests/rust-kernel-parity.R
+Rscript tests/usergwas-printwarn.R
+R CMD build .
+R CMD check --no-manual GenomicSEM_0.0.5.tar.gz
+```
+
+`R CMD check` status: 8 WARNINGs, 4 NOTEs, matching the existing package-level noise class; all package tests passed.
+
+Interpretation:
+
+- This is an API cleanup rather than a new performance checkpoint. The latest relevant common-factor performance numbers remain the Rust fast main+Q path from the previous entries.

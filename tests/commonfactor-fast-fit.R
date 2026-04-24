@@ -38,15 +38,14 @@ make_inputs <- function(n_snp = 12L, k = 5L) {
 
 inputs <- make_inputs()
 
-run_commonfactor <- function(fast, q_snp = FALSE) {
+run_commonfactor <- function(fast) {
   options(GenomicSEM.use_rust = TRUE)
   options(GenomicSEM.fast_commonfactor_fit = fast)
   suppressWarnings(commonfactorGWAS(
     covstruc = inputs$covstruc,
     SNPs = inputs$SNPs,
     parallel = FALSE,
-    GC = "standard",
-    Q_SNP = q_snp
+    GC = "standard"
   ))
 }
 
@@ -60,19 +59,6 @@ invisible(capture.output({
 stopifnot(identical(names(slow), names(fast)))
 stopifnot(max(abs(slow$est - fast$est), na.rm = TRUE) < 1e-5)
 stopifnot(max(abs(slow$se_c - fast$se_c), na.rm = TRUE) < 1e-6)
-stopifnot(all(is.na(fast$Q)))
-stopifnot(all(is.na(fast$Q_pval)))
-
-slow_q <- NULL
-fast_q <- NULL
-invisible(capture.output({
-  slow_q <- run_commonfactor(FALSE, q_snp = TRUE)
-  fast_q <- run_commonfactor(TRUE, q_snp = TRUE)
-}))
-
-stopifnot(identical(names(slow_q), names(fast_q)))
-stopifnot(max(abs(slow_q$est - fast_q$est), na.rm = TRUE) < 1e-5)
-stopifnot(max(abs(slow_q$se_c - fast_q$se_c), na.rm = TRUE) < 1e-6)
-stopifnot(max(abs(slow_q$Q - fast_q$Q), na.rm = TRUE) < 1e-2)
-stopifnot(max(abs(slow_q$Q_pval - fast_q$Q_pval), na.rm = TRUE) < 1e-4)
-stopifnot(all(fast_q$warning == 0))
+stopifnot(max(abs(slow$Q - fast$Q), na.rm = TRUE) < 1e-2)
+stopifnot(max(abs(slow$Q_pval - fast$Q_pval), na.rm = TRUE) < 1e-4)
+stopifnot(all(fast$warning == 0))

@@ -39,29 +39,18 @@ make_inputs <- function(n_snp = 5L, k = 3L) {
 }
 
 inputs <- make_inputs()
-with_q <- NULL
-without_q <- NULL
+result <- NULL
 
 invisible(capture.output({
-  with_q <- suppressWarnings(commonfactorGWAS(
+  result <- suppressWarnings(commonfactorGWAS(
     covstruc = inputs$covstruc,
     SNPs = inputs$SNPs,
     parallel = FALSE,
-    GC = "standard",
-    Q_SNP = TRUE
-  ))
-  without_q <- suppressWarnings(commonfactorGWAS(
-    covstruc = inputs$covstruc,
-    SNPs = inputs$SNPs,
-    parallel = FALSE,
-    GC = "standard",
-    Q_SNP = FALSE
+    GC = "standard"
   ))
 }))
 
-stopifnot(identical(names(with_q), names(without_q)))
-stopifnot(identical(with_q$est, without_q$est))
-stopifnot(identical(with_q$se_c, without_q$se_c))
-stopifnot(all(is.na(without_q$Q)))
-stopifnot(all(is.na(without_q$Q_pval)))
-
+stopifnot(all(is.finite(result$est)))
+stopifnot(all(is.finite(result$se_c)))
+stopifnot(all(is.finite(result$Q)))
+stopifnot(all(is.finite(result$Q_pval)))
