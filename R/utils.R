@@ -650,6 +650,224 @@ return(S_Full)
   )
 }
 
+.sem_fast_q_snp_info <- function(spec, model, S_LD, TWAS, Q_SNP) {
+  if (!Q_SNP) {
+    return(list(
+      lv = character(),
+      indices = matrix(integer(), nrow = 1L, ncol = 0L),
+      lengths = integer(),
+      df = integer()
+    ))
+  }
+
+  lv <- spec$latent_names
+  lines_SNP <- strsplit(model, "\n")[[1]]
+  lines_SNP <- str_replace_all(lines_SNP, fixed(" "), "")
+  if(TWAS){
+    lines_SNP <- lines_SNP[grepl("Gene", lines_SNP)]
+  }else{
+    lines_SNP <- lines_SNP[grepl("SNP", lines_SNP)]
+  }
+  lv <- lv[lv %in% gsub(" ~.*|~.*", "", lines_SNP)]
+
+  if (length(lv) == 0L) {
+    return(list(
+      lv = character(),
+      indices = matrix(integer(), nrow = 1L, ncol = 0L),
+      lengths = integer(),
+      df = integer()
+    ))
+  }
+
+  trait_names <- colnames(S_LD)
+  indicators <- lapply(lv, function(factor_name) {
+    subset(spec$ptable$rhs, spec$ptable$lhs == factor_name & spec$ptable$op == "=~")
+  })
+  df <- vapply(indicators, function(x) length(x) - 1L, integer(1))
+  idx <- lapply(indicators, function(x) match(x, trait_names))
+  lengths <- vapply(idx, function(x) if (length(x) > 0L && !is.na(x[[1L]])) length(x) else 0L, integer(1))
+  max_len <- max(lengths, 1L)
+  index_matrix <- matrix(0L, nrow = max_len, ncol = length(lv))
+  for (j in seq_along(idx)) {
+    if (lengths[[j]] > 0L && all(is.finite(idx[[j]]))) {
+      index_matrix[seq_len(lengths[[j]]), j] <- as.integer(idx[[j]])
+    }
+  }
+
+  list(lv = lv, indices = index_matrix, lengths = as.integer(lengths), df = as.integer(df))
+}
+
+.sem_fit_batch_fast <- function(S_LD, V_LD, I_LD, beta_SNP, SE_SNP, varSNP, GC, coords, varSNPSE2,
+                                order, spec, observed_original_names, q_snp_info,
+                                n_threads = 1L, max_iter = 100L, tol = 1e-10) {
+  if (!.genomicssem_use_rust() || is.null(spec) || !isTRUE(spec$supported)) {
+    return(NULL)
+  }
+
+  spec_to_original <- match(spec$observed_names, observed_original_names)
+  if (anyNA(spec_to_original)) {
+    return(NULL)
+  }
+
+  q <- length(spec$start)
+  q_snp_n <- length(q_snp_info$lv)
+  out <- tryCatch(
+    .Call(
+      "genomicssem_fit_generic_sem_batch_call",
+      as.integer(length(spec$observed_names)),
+      as.integer(length(spec$total_names)),
+      as.matrix(S_LD),
+      as.matrix(V_LD),
+      as.matrix(I_LD),
+      as.matrix(beta_SNP),
+      as.matrix(SE_SNP),
+      as.numeric(varSNP),
+      as.character(GC),
+      coords,
+      as.numeric(varSNPSE2),
+      matrix(as.integer(order), ncol = 1L),
+      matrix(as.integer(spec_to_original), ncol = 1L),
+      as.matrix(spec$b_fixed),
+      as.matrix(spec$psi_fixed),
+      matrix(as.integer(spec$b_free), nrow = nrow(spec$b_free), ncol = ncol(spec$b_free)),
+      matrix(as.integer(spec$psi_free), nrow = nrow(spec$psi_free), ncol = ncol(spec$psi_free)),
+      as.numeric(spec$start),
+      matrix(as.integer(q_snp_info$indices), nrow = nrow(q_snp_info$indices), ncol = ncol(q_snp_info$indices)),
+      matrix(as.integer(q_snp_info$lengths), ncol = 1L),
+      as.integer(max_iter),
+      as.numeric(tol),
+      as.integer(n_threads),
+      PACKAGE = "GenomicSEM"
+    ),
+    error = function(e) NULL
+  )
+
+  if (is.null(out)) {
+    return(NULL)
+  }
+
+  out_cols <- 2L * q + 1L + q_snp_n + 2L
+  out <- matrix(out, ncol = out_cols, byrow = TRUE)
+  converged_col <- 2L * q + 1L + q_snp_n + 1L
+  if (!all(out[, converged_col] == 1) || !all(is.finite(out[, seq_len(2L * q + 1L), drop = FALSE]))) {
+    return(NULL)
+  }
+
+  q_snp <- if (q_snp_n > 0L) {
+    out[, (2L * q + 2L):(2L * q + 1L + q_snp_n), drop = FALSE]
+  } else {
+    matrix(numeric(), nrow = nrow(out), ncol = 0L)
+  }
+  colnames(q_snp) <- q_snp_info$lv
+
+  list(
+    par = out[, seq_len(q), drop = FALSE],
+    se = out[, q + seq_len(q), drop = FALSE],
+    chisq = out[, 2L * q + 1L],
+    q_snp = q_snp,
+    iterations = as.integer(out[, out_cols])
+  )
+}
+
+.userGWAS_batch_results_fast <- function(batch_fit, spec, SNPs, TWAS, printwarn, Q_SNP, q_snp_info, df, npar, model) {
+  f <- nrow(batch_fit$par)
+  out <- vector(mode = "list", length = f)
+  free_fast <- as.integer(spec$ptable$free_fast)
+  free_rows <- free_fast > 0L
+  warn_names <- if(printwarn) c("error","warning") else character()
+
+  for (i in seq_len(f)) {
+    Model_Output <- spec$ptable
+    Model_Output$est[free_rows] <- batch_fit$par[i, free_fast[free_rows]]
+
+    SE <- rep(NA_real_, nrow(Model_Output))
+    SE[free_rows] <- batch_fit$se[i, free_fast[free_rows]]
+
+    unstand <- subset(Model_Output, Model_Output$plabel != "" & Model_Output$free > 0)[,c("lhs","op","rhs","free","label","est")]
+    unstand2 <- cbind(unstand, SE[Model_Output$plabel != "" & Model_Output$free > 0])
+    colnames(unstand2)[7] <- "SE"
+
+    other <- subset(Model_Output, (Model_Output$plabel == "" & Model_Output$op != ":=") | (Model_Output$free == 0 & Model_Output$plabel != ""))[,c("lhs","op","rhs","free","label","est")]
+    other$SE <- rep(NA, nrow(other))
+
+    if(nrow(other) > 0){
+      final <- rbind(unstand2,other)
+    }else{
+      final <- unstand2
+    }
+
+    final$index <- as.numeric(row.names(final))
+    final <- final[order(final$index), ]
+    final$index <- NULL
+
+    if(class(final$SE) != "factor"){
+      final$Z_Estimate <- final$est/final$SE
+      final$Pval_Estimate <- 2*pnorm(abs(final$Z_Estimate),lower.tail=FALSE)
+    }else{
+      final$SE <- as.character(final$SE)
+      final$Z_Estimate <- NA
+      final$Pval_Estimate <- NA
+    }
+
+    Q <- batch_fit$chisq[[i]]
+    if(!(is.na(Q))){
+      final$chisq <- rep(Q,nrow(final))
+      final$chisq_df <- df
+      final$chisq_pval <- pchisq(final$chisq,final$chisq_df,lower.tail=FALSE)
+      final$AIC <- rep(Q + 2*npar,nrow(final))
+    }else{
+      final$chisq <- rep(NA, nrow(final))
+      final$chisq_df <- rep(NA,nrow(final))
+      final$chisq_pval <- rep(NA,nrow(final))
+      final$AIC <- rep(NA, nrow(final))
+    }
+
+    if(Q_SNP){
+      final$Q_SNP <- rep(NA,nrow(final))
+      final$Q_SNP_df <- rep(NA,nrow(final))
+      final$Q_SNP_pval <- rep(NA,nrow(final))
+      if(length(q_snp_info$lv) > 0L){
+        for(r in seq_len(nrow(final))){
+          for(h in seq_along(q_snp_info$lv)){
+            if(final$lhs[r] == q_snp_info$lv[h] & ((final$rhs[r] == "Gene" & TWAS) | (final$rhs[r] == "SNP" & !TWAS))) {
+              final$Q_SNP[r] <- batch_fit$q_snp[i, h]
+              final$Q_SNP_df[r] <- q_snp_info$df[h]
+              final$Q_SNP_pval[r] <- pchisq(final$Q_SNP[r],final$Q_SNP_df[r],lower.tail=FALSE)
+            }
+          }
+        }
+      }
+    }
+
+    if(printwarn){
+      final$error <- 0
+      final$warning <- 0
+    }
+
+    final2 <- cbind(SNPs[i,],final,row.names=NULL)
+    final2 <- subset(final2, final2$op != "da")
+    final2$est <- ifelse(final2$op == "<" | final2$op == ">" | final2$op == ">=" | final2$op == "<=", final2$est == NA, final2$est)
+
+    if(TWAS){
+      if(Q_SNP){
+        new_names <- c("Gene","Panel","HSQ", "lhs", "op", "rhs", "free", "label", "est", "SE", "Z_Estimate", "Pval_Estimate","chisq","chisq_df","chisq_pval", "AIC","Q_SNP","Q_SNP_df","Q_SNP_pval", warn_names)
+      }else{
+        new_names <- c("Gene","Panel","HSQ", "lhs", "op", "rhs", "free", "label", "est", "SE", "Z_Estimate", "Pval_Estimate","chisq","chisq_df","chisq_pval", "AIC", warn_names)
+      }
+    }else{
+      if(Q_SNP){
+        new_names <- c("SNP", "CHR", "BP", "MAF", "A1", "A2", "lhs", "op", "rhs", "free", "label", "est", "SE", "Z_Estimate", "Pval_Estimate","chisq","chisq_df","chisq_pval", "AIC","Q_SNP","Q_SNP_df","Q_SNP_pval", warn_names)
+      }else{
+        new_names <- c("SNP", "CHR", "BP", "MAF", "A1", "A2", "lhs", "op", "rhs", "free", "label", "est", "SE", "Z_Estimate", "Pval_Estimate","chisq","chisq_df","chisq_pval", "AIC", warn_names)
+      }
+    }
+    colnames(final2) <- new_names
+    out[[i]] <- final2
+  }
+
+  out
+}
+
 .get_S_Full <- function(n_phenotypes, S_LD, varSNP, beta_SNP, TWAS, i) {
   if (.genomicssem_use_rust()) {
     S_Full <- .Call(

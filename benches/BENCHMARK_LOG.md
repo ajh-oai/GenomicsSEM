@@ -636,3 +636,66 @@ Interpretation:
 
 - Moving the common-factor SNP loop into one native call improves the previous Rust fast main+Q result from `0.916s -> 0.774s` single-core and `0.318s -> 0.194s` on 4 cores for this 100-SNP/12-trait benchmark.
 - The old R/lavaan baseline remains around `29s` single-core and `7.5s` on 4 cores, so the batched Rust path is about `37x` faster single-core and `38x` faster on 4 cores here.
+
+## 2026-04-24 02:54 PDT - Batch userGWAS fast model fits in Rust
+
+Change set:
+
+- Added a native `genomicssem_fit_generic_sem_batch_call` entry point for supported RAM-matrix DWLS models.
+- The supported fast `userGWAS()` path now builds SNP-specific `S`/`V`, runs the generic SEM fit, computes corrected SEs, computes model chi-square with a block-diagonal `V_full` solve, and computes `Q_SNP` values inside one Rust call.
+- R still assembles the lavaan-shaped per-SNP result list, while unsupported cases still fall back to the existing `.userGWAS_main()` path.
+
+Validation:
+
+```sh
+cargo test --workspace
+R CMD INSTALL --install-tests .
+Rscript tests/usergwas-fast-fit.R
+Rscript tests/usergwas-printwarn.R
+Rscript tests/commonfactor-fast-fit.R
+Rscript tests/commonfactor-qsnp.R
+```
+
+Benchmark command, `Q_SNP=FALSE`:
+
+```sh
+Rscript benches/bench_usergwas_synthetic.R 100 12 1,4 userGWAS 1 TRUE FALSE TRUE FALSE FALSE FALSE,TRUE
+```
+
+Results:
+
+| backend | cores | Q_SNP | fast_usergwas_fit | elapsed_sec | checksum |
+|---|---:|---|---|---:|---:|
+| old_r_workflow | 1 | FALSE | FALSE | 10.494 | 823014.4 |
+| old_r_workflow | 4 | FALSE | FALSE | 2.974 | 823014.4 |
+| rust_binding_workflow | 1 | FALSE | FALSE | 10.360 | 823014.4 |
+| rust_binding_workflow | 4 | FALSE | FALSE | 2.879 | 823014.4 |
+| old_r_workflow | 1 | FALSE | TRUE | 12.032 | 823014.4 |
+| old_r_workflow | 4 | FALSE | TRUE | 3.119 | 823014.4 |
+| rust_binding_workflow | 1 | FALSE | TRUE | 0.479 | 823014.4 |
+| rust_binding_workflow | 4 | FALSE | TRUE | 0.242 | 823014.4 |
+
+Benchmark command, `Q_SNP=TRUE`:
+
+```sh
+Rscript benches/bench_usergwas_synthetic.R 100 12 1,4 userGWAS 1 TRUE FALSE TRUE TRUE FALSE FALSE,TRUE
+```
+
+Results:
+
+| backend | cores | Q_SNP | fast_usergwas_fit | elapsed_sec | checksum |
+|---|---:|---|---|---:|---:|
+| old_r_workflow | 1 | TRUE | FALSE | 10.562 | 824321.7 |
+| old_r_workflow | 4 | TRUE | FALSE | 2.970 | 824321.7 |
+| rust_binding_workflow | 1 | TRUE | FALSE | 9.787 | 824321.7 |
+| rust_binding_workflow | 4 | TRUE | FALSE | 2.930 | 824321.7 |
+| old_r_workflow | 1 | TRUE | TRUE | 11.392 | 824321.7 |
+| old_r_workflow | 4 | TRUE | TRUE | 3.100 | 824321.7 |
+| rust_binding_workflow | 1 | TRUE | TRUE | 0.446 | 824321.7 |
+| rust_binding_workflow | 4 | TRUE | TRUE | 0.256 | 824321.7 |
+
+Interpretation:
+
+- Batching the supported `userGWAS()` Rust fast path improves `Q_SNP=FALSE` from the previous `0.758s -> 0.479s` single-core and `0.535s -> 0.242s` on 4 cores.
+- For `Q_SNP=TRUE`, the checkpoint improves from `0.762s -> 0.446s` single-core and `0.366s -> 0.256s` on 4 cores.
+- The remaining runtime is now mostly output assembly and the one-time lavaan setup used to build the parameter table/order.

@@ -35,4 +35,4 @@ Rscript benches/profile_workflows.R 100 3 userGWAS 1
 Rscript benches/bench_usergwas_synthetic.R <n_snp> <k> <cores> <workflow> <seed> <fast_diag> <fast_wls> <printwarn> <q_snp> <fast_commonfactor_fit> <fast_usergwas_fit>
 ```
 
-Each toggle can be a comma-separated list such as `FALSE,TRUE`. `printwarn`, `q_snp`, and `fast_usergwas_fit` only apply to `userGWAS()`. `fast_commonfactor_fit` only applies to `commonfactorGWAS()`. The fast common-factor fit is an experimental Rust Gauss-Newton replacement for the main lavaan fit and the direct-effect Q model. The fast userGWAS fit is an experimental Rust RAM-matrix solver for supported DWLS parameter-table models.
+Each toggle can be a comma-separated list such as `FALSE,TRUE`. `printwarn`, `q_snp`, and `fast_usergwas_fit` only apply to `userGWAS()`. `fast_commonfactor_fit` only applies to `commonfactorGWAS()`. The fast common-factor fit is an experimental batched Rust Gauss-Newton replacement for the main lavaan fit and the direct-effect Q model. The fast userGWAS fit is an experimental batched Rust RAM-matrix solver for supported DWLS parameter-table models.

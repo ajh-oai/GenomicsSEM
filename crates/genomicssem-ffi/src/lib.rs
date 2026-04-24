@@ -2,7 +2,8 @@
 
 use genomicssem_core::{
     fill_s_full, fill_v_full, fill_v_snp, fill_v_snp_batch, fill_z_pre, fit_commonfactor_batch,
-    fit_commonfactor_main, fit_commonfactor_q, fit_generic_sem, GenomicControl, KernelError,
+    fit_commonfactor_main, fit_commonfactor_q, fit_generic_sem, fit_generic_sem_batch,
+    GenomicControl, KernelError,
 };
 use std::slice;
 
@@ -470,6 +471,125 @@ pub unsafe extern "C" fn genomicssem_fit_generic_sem(
             start,
             max_iter,
             tol,
+            out,
+        )
+    })();
+
+    result.map(|()| OK).unwrap_or_else(code)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn genomicssem_fit_generic_sem_batch(
+    obs_n: usize,
+    total_n: usize,
+    s_ld: *const f64,
+    s_ld_nrow: usize,
+    s_ld_ncol: usize,
+    v_ld: *const f64,
+    v_ld_nrow: usize,
+    v_ld_ncol: usize,
+    i_ld: *const f64,
+    i_ld_nrow: usize,
+    i_ld_ncol: usize,
+    beta_snp: *const f64,
+    beta_nrow: usize,
+    beta_ncol: usize,
+    se_snp: *const f64,
+    se_nrow: usize,
+    se_ncol: usize,
+    var_snp: *const f64,
+    var_snp_len: usize,
+    coords: *const i32,
+    coords_nrow: usize,
+    coords_ncol: usize,
+    var_snp_se2: f64,
+    gc_code: i32,
+    order: *const i32,
+    order_len: usize,
+    spec_to_original: *const i32,
+    spec_to_original_len: usize,
+    b_fixed: *const f64,
+    b_fixed_len: usize,
+    psi_fixed: *const f64,
+    psi_fixed_len: usize,
+    b_free: *const i32,
+    b_free_len: usize,
+    psi_free: *const i32,
+    psi_free_len: usize,
+    start: *const f64,
+    start_len: usize,
+    q_snp_indices: *const i32,
+    q_snp_nrow: usize,
+    q_snp_ncol: usize,
+    q_snp_lengths: *const i32,
+    q_snp_lengths_len: usize,
+    max_iter: usize,
+    tol: f64,
+    n_threads: usize,
+    out: *mut f64,
+    out_len: usize,
+) -> i32 {
+    let Some(gc) = GenomicControl::from_code(gc_code) else {
+        return BAD_GC;
+    };
+
+    let result = (|| {
+        let s_ld = checked_slice(s_ld, s_ld_nrow * s_ld_ncol)?;
+        let v_ld = checked_slice(v_ld, v_ld_nrow * v_ld_ncol)?;
+        let i_ld = checked_slice(i_ld, i_ld_nrow * i_ld_ncol)?;
+        let beta_snp = checked_slice(beta_snp, beta_nrow * beta_ncol)?;
+        let se_snp = checked_slice(se_snp, se_nrow * se_ncol)?;
+        let var_snp = checked_slice(var_snp, var_snp_len)?;
+        let coords = checked_slice(coords, coords_nrow * coords_ncol)?;
+        let order = checked_slice(order, order_len)?;
+        let spec_to_original = checked_slice(spec_to_original, spec_to_original_len)?;
+        let b_fixed = checked_slice(b_fixed, b_fixed_len)?;
+        let psi_fixed = checked_slice(psi_fixed, psi_fixed_len)?;
+        let b_free = checked_slice(b_free, b_free_len)?;
+        let psi_free = checked_slice(psi_free, psi_free_len)?;
+        let start = checked_slice(start, start_len)?;
+        let q_snp_indices = checked_slice(q_snp_indices, q_snp_nrow * q_snp_ncol)?;
+        let q_snp_lengths = checked_slice(q_snp_lengths, q_snp_lengths_len)?;
+        let out = checked_slice_mut(out, out_len)?;
+
+        fit_generic_sem_batch(
+            obs_n,
+            total_n,
+            s_ld,
+            s_ld_nrow,
+            s_ld_ncol,
+            v_ld,
+            v_ld_nrow,
+            v_ld_ncol,
+            i_ld,
+            i_ld_nrow,
+            i_ld_ncol,
+            beta_snp,
+            beta_nrow,
+            beta_ncol,
+            se_snp,
+            se_nrow,
+            se_ncol,
+            var_snp,
+            coords,
+            coords_nrow,
+            coords_ncol,
+            var_snp_se2,
+            gc,
+            order,
+            spec_to_original,
+            b_fixed,
+            psi_fixed,
+            b_free,
+            psi_free,
+            start,
+            q_snp_indices,
+            q_snp_nrow,
+            q_snp_ncol,
+            q_snp_lengths,
+            max_iter,
+            tol,
+            n_threads,
             out,
         )
     })();

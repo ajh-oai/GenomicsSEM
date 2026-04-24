@@ -245,6 +245,66 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
     LavModel1 <- .userGWAS_main(i=1, cores=1, n_phenotypes, n=1, I_LD, V_LD, S_LD, std.lv, varSNPSE2, order, SNPs, beta_SNP, SE_SNP, varSNP, GC,
                                 coords, smooth_check, TWAS, printwarn, toler, estimation, sub, Model1, df, npar, returnlavmodel=TRUE,Q_SNP=Q_SNP,model=model)
   }
+
+  if(use_fast_usergwas && !is.null(fast_fit_spec) && isTRUE(fast_fit_spec$supported) &&
+     sub[[1]] == FALSE && !smooth_check && !MPI){
+    batch_threads <- 1L
+    if(parallel){
+      if(is.null(cores)){
+        batch_threads <- min(c(nrow(SNPs), detectCores() - 1))
+      }else{
+        if (cores > nrow(SNPs))
+          warning(paste0("Provided number of cores was greater than number of SNPs, reverting to cores=",nrow(SNPs)))
+        batch_threads <- min(c(cores, nrow(SNPs)))
+      }
+      batch_threads <- max(1L, batch_threads)
+    }
+
+    q_snp_info <- .sem_fast_q_snp_info(fast_fit_spec, model, S_LD, TWAS, Q_SNP)
+    observed_original_names <- c(if(TWAS) "Gene" else "SNP", colnames(S_LD))
+    batch_fit <- .sem_fit_batch_fast(
+      S_LD = S_LD,
+      V_LD = V_LD,
+      I_LD = I_LD,
+      beta_SNP = beta_SNP,
+      SE_SNP = SE_SNP,
+      varSNP = varSNP,
+      GC = GC,
+      coords = coords,
+      varSNPSE2 = varSNPSE2,
+      order = order,
+      spec = fast_fit_spec,
+      observed_original_names = observed_original_names,
+      q_snp_info = q_snp_info,
+      n_threads = batch_threads,
+      max_iter = getOption("GenomicSEM.fast_usergwas_max_iter", 100L),
+      tol = getOption("GenomicSEM.fast_usergwas_tol", 1e-10)
+    )
+
+    if(!is.null(batch_fit)){
+      if(TWAS){
+        print("Starting TWAS Estimation")
+      } else {
+        print("Starting GWAS Estimation")
+      }
+      Results_List <- .userGWAS_batch_results_fast(
+        batch_fit = batch_fit,
+        spec = fast_fit_spec,
+        SNPs = SNPs,
+        TWAS = TWAS,
+        printwarn = printwarn,
+        Q_SNP = Q_SNP,
+        q_snp_info = q_snp_info,
+        df = df,
+        npar = npar,
+        model = model
+      )
+      time_all <- proc.time()-time
+      print(time_all[3])
+      return(Results_List)
+    }
+  }
+
   if(!parallel){
     #make empty list object for model results if not saving specific model parameter
     if(sub[[1]]==FALSE){

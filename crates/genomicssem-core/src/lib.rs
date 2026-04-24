@@ -1335,6 +1335,543 @@ pub fn fit_generic_sem(
     Ok(())
 }
 
+fn reorder_square_col_major(
+    input: &[f64],
+    input_n: usize,
+    order_zero: &[usize],
+    out: &mut [f64],
+) -> KernelResult<()> {
+    let n = order_zero.len();
+    if input.len() != input_n * input_n || out.len() != n * n {
+        return Err(KernelError::BadDimensions);
+    }
+
+    for col in 0..n {
+        let source_col = order_zero[col];
+        if source_col >= input_n {
+            return Err(KernelError::BadIndex);
+        }
+        for row in 0..n {
+            let source_row = order_zero[row];
+            if source_row >= input_n {
+                return Err(KernelError::BadIndex);
+            }
+            out[idx(row, col, n)] = input[idx(source_row, source_col, input_n)];
+        }
+    }
+
+    Ok(())
+}
+
+fn vech_residual_original_order(
+    s_original: &[f64],
+    implied_spec: &[f64],
+    obs_n: usize,
+    spec_to_original: &[usize],
+    out: &mut [f64],
+) -> KernelResult<()> {
+    let m = obs_n * (obs_n + 1) / 2;
+    if s_original.len() != obs_n * obs_n
+        || implied_spec.len() != obs_n * obs_n
+        || spec_to_original.len() != obs_n
+        || out.len() != m
+    {
+        return Err(KernelError::BadDimensions);
+    }
+
+    let mut original_to_spec = vec![usize::MAX; obs_n];
+    for (spec_i, &original_i) in spec_to_original.iter().enumerate() {
+        if original_i >= obs_n || original_to_spec[original_i] != usize::MAX {
+            return Err(KernelError::BadIndex);
+        }
+        original_to_spec[original_i] = spec_i;
+    }
+
+    let mut out_i = 0;
+    for col in 0..obs_n {
+        let spec_col = original_to_spec[col];
+        for row in col..obs_n {
+            let spec_row = original_to_spec[row];
+            out[out_i] =
+                s_original[idx(row, col, obs_n)] - implied_spec[idx(spec_row, spec_col, obs_n)];
+            out_i += 1;
+        }
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn block_diagonal_gwas_q(
+    eta: &[f64],
+    k: usize,
+    var_snp_se2: f64,
+    v_snp: &[f64],
+    v_ld_inv_row_major: &[f64],
+) -> KernelResult<f64> {
+    let obs_n = k + 1;
+    let m = obs_n * (obs_n + 1) / 2;
+    let ld_m = k * (k + 1) / 2;
+    if eta.len() != m
+        || v_snp.len() != k * k
+        || v_ld_inv_row_major.len() != ld_m * ld_m
+        || !var_snp_se2.is_finite()
+        || var_snp_se2 == 0.0
+    {
+        return Err(KernelError::BadDimensions);
+    }
+
+    let mut out = eta[0] * eta[0] / var_snp_se2;
+
+    let eta_snp = &eta[1..(k + 1)];
+    let mut v_snp_row_major = vec![0.0; k * k];
+    for col in 0..k {
+        for row in 0..k {
+            v_snp_row_major[ridx(row, col, k)] = v_snp[idx(row, col, k)];
+        }
+    }
+    out += quadratic_form_inverse(&v_snp_row_major, eta_snp, k)?;
+
+    let eta_ld = &eta[(k + 1)..];
+    for row in 0..ld_m {
+        let mut row_sum = 0.0;
+        for col in 0..ld_m {
+            row_sum += v_ld_inv_row_major[ridx(row, col, ld_m)] * eta_ld[col];
+        }
+        out += eta_ld[row] * row_sum;
+    }
+
+    Ok(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fit_generic_sem_snp_fast(
+    obs_n: usize,
+    total_n: usize,
+    s_ld: &[f64],
+    s_ld_nrow: usize,
+    s_ld_ncol: usize,
+    v_ld: &[f64],
+    v_ld_nrow: usize,
+    v_ld_ncol: usize,
+    v_ld_inv_row_major: &[f64],
+    i_ld: &[f64],
+    i_ld_nrow: usize,
+    i_ld_ncol: usize,
+    beta_snp: &[f64],
+    beta_nrow: usize,
+    beta_ncol: usize,
+    se_snp: &[f64],
+    se_nrow: usize,
+    se_ncol: usize,
+    var_snp: &[f64],
+    coords: &[i32],
+    coords_nrow: usize,
+    coords_ncol: usize,
+    var_snp_se2: f64,
+    gc: GenomicControl,
+    order_zero: &[usize],
+    spec_to_original: &[usize],
+    b_fixed: &[f64],
+    psi_fixed: &[f64],
+    b_free: &[i32],
+    psi_free: &[i32],
+    start: &[f64],
+    q_snp_indices_zero: &[i32],
+    q_snp_nrow: usize,
+    q_snp_ncol: usize,
+    q_snp_lengths: &[i32],
+    max_iter: usize,
+    tol: f64,
+    i_zero: usize,
+    out: &mut [f64],
+) -> KernelResult<()> {
+    let k = obs_n - 1;
+    let m = obs_n * (obs_n + 1) / 2;
+    let q = start.len();
+    let out_cols = 2 * q + 1 + q_snp_ncol + 2;
+    if out.len() != out_cols || obs_n == 0 || spec_to_original.len() != obs_n {
+        return Err(KernelError::BadDimensions);
+    }
+
+    let mut s_original = vec![0.0; obs_n * obs_n];
+    fill_s_full(
+        k,
+        s_ld,
+        s_ld_nrow,
+        s_ld_ncol,
+        var_snp,
+        beta_snp,
+        beta_nrow,
+        beta_ncol,
+        i_zero,
+        &mut s_original,
+    )?;
+
+    let mut s_spec = vec![0.0; obs_n * obs_n];
+    reorder_square_col_major(&s_original, obs_n, spec_to_original, &mut s_spec)?;
+
+    let mut v_snp = vec![0.0; k * k];
+    fill_v_snp(
+        se_snp,
+        se_nrow,
+        se_ncol,
+        i_zero,
+        i_ld,
+        i_ld_nrow,
+        i_ld_ncol,
+        var_snp,
+        coords,
+        coords_nrow,
+        coords_ncol,
+        k,
+        gc,
+        &mut v_snp,
+    )?;
+
+    let mut v_full = vec![0.0; m * m];
+    fill_v_full(
+        k,
+        v_ld,
+        v_ld_nrow,
+        v_ld_ncol,
+        var_snp_se2,
+        &v_snp,
+        k,
+        k,
+        &mut v_full,
+    )?;
+
+    let mut v_reorder = vec![0.0; m * m];
+    reorder_square_col_major(&v_full, m, order_zero, &mut v_reorder)?;
+
+    let mut w_diag = vec![0.0; m];
+    for d in 0..m {
+        let value = v_reorder[idx(d, d, m)];
+        if !value.is_finite() || value == 0.0 {
+            return Err(KernelError::Singular);
+        }
+        w_diag[d] = 1.0 / value;
+    }
+
+    let mut fit_out = vec![0.0; 2 * q + obs_n * obs_n + 3];
+    fit_generic_sem(
+        obs_n,
+        total_n,
+        &s_spec,
+        obs_n,
+        obs_n,
+        &v_reorder,
+        m,
+        m,
+        &w_diag,
+        b_fixed,
+        psi_fixed,
+        b_free,
+        psi_free,
+        start,
+        max_iter,
+        tol,
+        &mut fit_out,
+    )?;
+
+    let converged = fit_out[2 * q + obs_n * obs_n + 1] == 1.0;
+    if !converged
+        || !fit_out[..(2 * q + obs_n * obs_n)]
+            .iter()
+            .all(|v| v.is_finite())
+    {
+        return Err(KernelError::Singular);
+    }
+
+    let implied = &fit_out[(2 * q)..(2 * q + obs_n * obs_n)];
+    let mut eta = vec![0.0; m];
+    vech_residual_original_order(&s_original, implied, obs_n, spec_to_original, &mut eta)?;
+    let chisq = block_diagonal_gwas_q(&eta, k, var_snp_se2, &v_snp, v_ld_inv_row_major)?;
+    if !chisq.is_finite() {
+        return Err(KernelError::Singular);
+    }
+
+    out[..q].copy_from_slice(&fit_out[..q]);
+    out[q..(2 * q)].copy_from_slice(&fit_out[q..(2 * q)]);
+    out[2 * q] = chisq;
+
+    for q_idx in 0..q_snp_ncol {
+        let len = if q_idx < q_snp_lengths.len() {
+            q_snp_lengths[q_idx]
+        } else {
+            0
+        };
+        let out_idx = 2 * q + 1 + q_idx;
+        if len <= 0 {
+            out[out_idx] = f64::NAN;
+            continue;
+        }
+
+        let len = len as usize;
+        if len > q_snp_nrow {
+            return Err(KernelError::BadDimensions);
+        }
+
+        let mut eta_snp = vec![0.0; len];
+        let mut v_sub = vec![0.0; len * len];
+        for col in 0..len {
+            let trait_col_i32 = q_snp_indices_zero[idx(col, q_idx, q_snp_nrow)];
+            if trait_col_i32 < 0 {
+                out[out_idx] = f64::NAN;
+                continue;
+            }
+            let trait_col = trait_col_i32 as usize;
+            if trait_col >= k {
+                return Err(KernelError::BadIndex);
+            }
+
+            let original_col = trait_col + 1;
+            let eta_idx = vech_index(original_col, 0, obs_n);
+            eta_snp[col] = eta[eta_idx];
+
+            for row in 0..len {
+                let trait_row_i32 = q_snp_indices_zero[idx(row, q_idx, q_snp_nrow)];
+                if trait_row_i32 < 0 {
+                    out[out_idx] = f64::NAN;
+                    continue;
+                }
+                let trait_row = trait_row_i32 as usize;
+                if trait_row >= k {
+                    return Err(KernelError::BadIndex);
+                }
+                v_sub[ridx(row, col, len)] = v_snp[idx(trait_row, trait_col, k)];
+            }
+        }
+
+        out[out_idx] = quadratic_form_inverse(&v_sub, &eta_snp, len).unwrap_or(f64::NAN);
+    }
+
+    out[2 * q + 1 + q_snp_ncol] = 1.0;
+    out[2 * q + 1 + q_snp_ncol + 1] = fit_out[2 * q + obs_n * obs_n + 2];
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fit_generic_sem_batch(
+    obs_n: usize,
+    total_n: usize,
+    s_ld: &[f64],
+    s_ld_nrow: usize,
+    s_ld_ncol: usize,
+    v_ld: &[f64],
+    v_ld_nrow: usize,
+    v_ld_ncol: usize,
+    i_ld: &[f64],
+    i_ld_nrow: usize,
+    i_ld_ncol: usize,
+    beta_snp: &[f64],
+    beta_nrow: usize,
+    beta_ncol: usize,
+    se_snp: &[f64],
+    se_nrow: usize,
+    se_ncol: usize,
+    var_snp: &[f64],
+    coords: &[i32],
+    coords_nrow: usize,
+    coords_ncol: usize,
+    var_snp_se2: f64,
+    gc: GenomicControl,
+    order_one: &[i32],
+    spec_to_original_one: &[i32],
+    b_fixed: &[f64],
+    psi_fixed: &[f64],
+    b_free: &[i32],
+    psi_free: &[i32],
+    start: &[f64],
+    q_snp_indices_one: &[i32],
+    q_snp_nrow: usize,
+    q_snp_ncol: usize,
+    q_snp_lengths: &[i32],
+    max_iter: usize,
+    tol: f64,
+    n_threads: usize,
+    out: &mut [f64],
+) -> KernelResult<()> {
+    let k = obs_n.checked_sub(1).ok_or(KernelError::BadDimensions)?;
+    let m = obs_n * (obs_n + 1) / 2;
+    let q = start.len();
+    let out_cols = 2 * q + 1 + q_snp_ncol + 2;
+    let total_sq = total_n * total_n;
+
+    if obs_n == 0
+        || total_n < obs_n
+        || beta_nrow != se_nrow
+        || beta_ncol < k
+        || se_ncol < k
+        || var_snp.len() != beta_nrow
+        || s_ld.len() != s_ld_nrow * s_ld_ncol
+        || v_ld.len() != v_ld_nrow * v_ld_ncol
+        || i_ld.len() != i_ld_nrow * i_ld_ncol
+        || beta_snp.len() != beta_nrow * beta_ncol
+        || se_snp.len() != se_nrow * se_ncol
+        || coords.len() != coords_nrow * coords_ncol
+        || order_one.len() != m
+        || spec_to_original_one.len() != obs_n
+        || b_fixed.len() != total_sq
+        || psi_fixed.len() != total_sq
+        || b_free.len() != total_sq
+        || psi_free.len() != total_sq
+        || q_snp_indices_one.len() != q_snp_nrow * q_snp_ncol
+        || q_snp_lengths.len() != q_snp_ncol
+        || out.len() != beta_nrow * out_cols
+    {
+        return Err(KernelError::BadDimensions);
+    }
+
+    let mut order_zero = vec![0usize; m];
+    for (i, value) in order_one.iter().enumerate() {
+        if *value <= 0 {
+            return Err(KernelError::BadIndex);
+        }
+        order_zero[i] = (*value - 1) as usize;
+    }
+
+    let mut spec_to_original = vec![0usize; obs_n];
+    for (i, value) in spec_to_original_one.iter().enumerate() {
+        if *value <= 0 {
+            return Err(KernelError::BadIndex);
+        }
+        spec_to_original[i] = (*value - 1) as usize;
+    }
+
+    let mut q_snp_indices_zero = vec![0i32; q_snp_nrow * q_snp_ncol];
+    for (i, value) in q_snp_indices_one.iter().enumerate() {
+        q_snp_indices_zero[i] = if *value <= 0 { -1 } else { *value - 1 };
+    }
+
+    let ld_m = k * (k + 1) / 2;
+    if v_ld_nrow != ld_m || v_ld_ncol != ld_m {
+        return Err(KernelError::BadDimensions);
+    }
+    let mut v_ld_row_major = vec![0.0; ld_m * ld_m];
+    for col in 0..ld_m {
+        for row in 0..ld_m {
+            v_ld_row_major[ridx(row, col, ld_m)] = v_ld[idx(row, col, ld_m)];
+        }
+    }
+    let v_ld_inv_row_major = invert_matrix(&v_ld_row_major, ld_m)?;
+
+    let run = || {
+        use rayon::prelude::*;
+
+        out.par_chunks_mut(out_cols)
+            .enumerate()
+            .for_each(|(i_zero, out_one)| {
+                let result = fit_generic_sem_snp_fast(
+                    obs_n,
+                    total_n,
+                    s_ld,
+                    s_ld_nrow,
+                    s_ld_ncol,
+                    v_ld,
+                    v_ld_nrow,
+                    v_ld_ncol,
+                    &v_ld_inv_row_major,
+                    i_ld,
+                    i_ld_nrow,
+                    i_ld_ncol,
+                    beta_snp,
+                    beta_nrow,
+                    beta_ncol,
+                    se_snp,
+                    se_nrow,
+                    se_ncol,
+                    var_snp,
+                    coords,
+                    coords_nrow,
+                    coords_ncol,
+                    var_snp_se2,
+                    gc,
+                    &order_zero,
+                    &spec_to_original,
+                    b_fixed,
+                    psi_fixed,
+                    b_free,
+                    psi_free,
+                    start,
+                    &q_snp_indices_zero,
+                    q_snp_nrow,
+                    q_snp_ncol,
+                    q_snp_lengths,
+                    max_iter,
+                    tol,
+                    i_zero,
+                    out_one,
+                );
+                if result.is_err() {
+                    out_one.fill(f64::NAN);
+                    out_one[2 * q + 1 + q_snp_ncol] = 0.0;
+                }
+            })
+    };
+
+    if n_threads <= 1 {
+        for (i_zero, out_one) in out.chunks_mut(out_cols).enumerate() {
+            let result = fit_generic_sem_snp_fast(
+                obs_n,
+                total_n,
+                s_ld,
+                s_ld_nrow,
+                s_ld_ncol,
+                v_ld,
+                v_ld_nrow,
+                v_ld_ncol,
+                &v_ld_inv_row_major,
+                i_ld,
+                i_ld_nrow,
+                i_ld_ncol,
+                beta_snp,
+                beta_nrow,
+                beta_ncol,
+                se_snp,
+                se_nrow,
+                se_ncol,
+                var_snp,
+                coords,
+                coords_nrow,
+                coords_ncol,
+                var_snp_se2,
+                gc,
+                &order_zero,
+                &spec_to_original,
+                b_fixed,
+                psi_fixed,
+                b_free,
+                psi_free,
+                start,
+                &q_snp_indices_zero,
+                q_snp_nrow,
+                q_snp_ncol,
+                q_snp_lengths,
+                max_iter,
+                tol,
+                i_zero,
+                out_one,
+            );
+            if result.is_err() {
+                out_one.fill(f64::NAN);
+                out_one[2 * q + 1 + q_snp_ncol] = 0.0;
+            }
+        }
+        return Ok(());
+    }
+
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(n_threads)
+        .build()
+        .map_err(|_| KernelError::ThreadPoolBuild)?
+        .install(run);
+
+    Ok(())
+}
+
 pub fn fill_v_snp(
     se_snp: &[f64],
     se_nrow: usize,
