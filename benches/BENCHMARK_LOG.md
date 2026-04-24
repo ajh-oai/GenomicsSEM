@@ -594,3 +594,45 @@ R CMD check --no-manual GenomicSEM_0.0.5.tar.gz
 Interpretation:
 
 - This is an API cleanup rather than a new performance checkpoint. The latest relevant common-factor performance numbers remain the Rust fast main+Q path from the previous entries.
+
+## 2026-04-24 02:40 PDT - Batch commonfactorGWAS fast path in Rust
+
+Change set:
+
+- Added a native `genomicssem_fit_commonfactor_batch_call` entry point.
+- The supported fast `commonfactorGWAS()` DWLS path now builds SNP-specific `S`/`V`, runs the main common-factor fit, runs the direct-effect Q fit, and computes Q inside one Rust call.
+- `parallel=TRUE` now maps to Rust/Rayon threads for this fast path instead of R `foreach`; unsupported cases still fall back to the existing R/lavaan loop.
+
+Validation:
+
+```sh
+cargo test --workspace
+R CMD INSTALL --install-tests .
+Rscript tests/commonfactor-fast-fit.R
+Rscript tests/commonfactor-qsnp.R
+Rscript tests/rust-kernel-parity.R
+```
+
+Benchmark command:
+
+```sh
+Rscript benches/bench_usergwas_synthetic.R 100 12 1,4 commonfactorGWAS 1 TRUE FALSE TRUE TRUE FALSE,TRUE FALSE
+```
+
+Results:
+
+| backend | cores | fast_commonfactor_fit | elapsed_sec | checksum |
+|---|---:|---|---:|---:|
+| old_r_workflow | 1 | FALSE | 28.949 | 11616.85 |
+| old_r_workflow | 4 | FALSE | 7.467 | 11616.85 |
+| rust_binding_workflow | 1 | FALSE | 30.000 | 11616.85 |
+| rust_binding_workflow | 4 | FALSE | 7.244 | 11616.85 |
+| old_r_workflow | 1 | TRUE | 30.525 | 11616.85 |
+| old_r_workflow | 4 | TRUE | 7.509 | 11616.85 |
+| rust_binding_workflow | 1 | TRUE | 0.774 | 11616.85 |
+| rust_binding_workflow | 4 | TRUE | 0.194 | 11616.85 |
+
+Interpretation:
+
+- Moving the common-factor SNP loop into one native call improves the previous Rust fast main+Q result from `0.916s -> 0.774s` single-core and `0.318s -> 0.194s` on 4 cores for this 100-SNP/12-trait benchmark.
+- The old R/lavaan baseline remains around `29s` single-core and `7.5s` on 4 cores, so the batched Rust path is about `37x` faster single-core and `38x` faster on 4 cores here.

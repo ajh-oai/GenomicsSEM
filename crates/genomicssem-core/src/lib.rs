@@ -28,6 +28,8 @@ pub enum KernelError {
 
 pub type KernelResult<T> = Result<T, KernelError>;
 
+pub const COMMONFACTOR_BATCH_OUT_COLS: usize = 7;
+
 #[inline]
 fn idx(row: usize, col: usize, nrow: usize) -> usize {
     row + col * nrow
@@ -109,6 +111,19 @@ fn invert_matrix(a: &[f64], n: usize) -> KernelResult<Vec<f64>> {
         }
     }
     Ok(inv)
+}
+
+fn quadratic_form_inverse(a: &[f64], x: &[f64], n: usize) -> KernelResult<f64> {
+    if a.len() != n * n || x.len() != n {
+        return Err(KernelError::BadDimensions);
+    }
+
+    let sol = solve_linear(a, x, n)?;
+    let mut out = 0.0;
+    for i in 0..n {
+        out += x[i] * sol[i];
+    }
+    Ok(out)
 }
 
 fn vech_index(row: usize, col: usize, n: usize) -> usize {
@@ -298,8 +313,8 @@ fn generic_sem_implied(
     let mut a = vec![0.0; total_sq];
     for row in 0..total_n {
         for col in 0..total_n {
-            a[ridx(row, col, total_n)] = if row == col { 1.0 } else { 0.0 }
-                - b[ridx(row, col, total_n)];
+            a[ridx(row, col, total_n)] =
+                if row == col { 1.0 } else { 0.0 } - b[ridx(row, col, total_n)];
         }
     }
 
@@ -775,6 +790,327 @@ pub fn fit_commonfactor_q(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn fit_commonfactor_snp_fast(
+    k: usize,
+    s_ld: &[f64],
+    s_ld_nrow: usize,
+    s_ld_ncol: usize,
+    v_ld: &[f64],
+    v_ld_nrow: usize,
+    v_ld_ncol: usize,
+    i_ld: &[f64],
+    i_ld_nrow: usize,
+    i_ld_ncol: usize,
+    beta_snp: &[f64],
+    beta_nrow: usize,
+    beta_ncol: usize,
+    se_snp: &[f64],
+    se_nrow: usize,
+    se_ncol: usize,
+    var_snp: &[f64],
+    coords: &[i32],
+    coords_nrow: usize,
+    coords_ncol: usize,
+    var_snp_se2: f64,
+    gc: GenomicControl,
+    start: &[f64],
+    max_iter_main: usize,
+    max_iter_q: usize,
+    tol: f64,
+    i_zero: usize,
+    out: &mut [f64],
+) -> KernelResult<()> {
+    if out.len() != COMMONFACTOR_BATCH_OUT_COLS {
+        return Err(KernelError::BadDimensions);
+    }
+
+    let n = k + 1;
+    let m = n * (n + 1) / 2;
+    let main_q = 2 * k + 2;
+    let q_q = 2 * k;
+
+    let mut s_full = vec![0.0; n * n];
+    fill_s_full(
+        k,
+        s_ld,
+        s_ld_nrow,
+        s_ld_ncol,
+        var_snp,
+        beta_snp,
+        beta_nrow,
+        beta_ncol,
+        i_zero,
+        &mut s_full,
+    )?;
+
+    let mut v_snp = vec![0.0; k * k];
+    fill_v_snp(
+        se_snp,
+        se_nrow,
+        se_ncol,
+        i_zero,
+        i_ld,
+        i_ld_nrow,
+        i_ld_ncol,
+        var_snp,
+        coords,
+        coords_nrow,
+        coords_ncol,
+        k,
+        gc,
+        &mut v_snp,
+    )?;
+
+    let mut v_full = vec![0.0; m * m];
+    fill_v_full(
+        k,
+        v_ld,
+        v_ld_nrow,
+        v_ld_ncol,
+        var_snp_se2,
+        &v_snp,
+        k,
+        k,
+        &mut v_full,
+    )?;
+
+    let mut w_diag = vec![0.0; m];
+    for d in 0..m {
+        let value = v_full[idx(d, d, m)];
+        if !value.is_finite() || value == 0.0 {
+            return Err(KernelError::Singular);
+        }
+        w_diag[d] = 1.0 / value;
+    }
+
+    let mut main_out = vec![0.0; 2 * main_q + 3];
+    fit_commonfactor_main(
+        k,
+        &s_full,
+        n,
+        n,
+        &v_full,
+        m,
+        m,
+        &w_diag,
+        start,
+        max_iter_main,
+        tol,
+        &mut main_out,
+    )?;
+
+    let main_converged = main_out[2 * main_q + 1] == 1.0;
+    if !main_converged || !main_out[..(2 * main_q)].iter().all(|v| v.is_finite()) {
+        return Err(KernelError::Singular);
+    }
+
+    let mut fixed = vec![0.0; k + 3];
+    fixed[0] = 1.0;
+    for j in 1..k {
+        fixed[j] = main_out[j - 1];
+    }
+    fixed[k] = main_out[k - 1];
+    fixed[k + 1] = main_out[2 * k];
+    fixed[k + 2] = main_out[2 * k + 1];
+
+    let b = fixed[k];
+    let psi = fixed[k + 1];
+    let var_x = fixed[k + 2];
+
+    let mut q_start = vec![0.0; q_q];
+    let mut q_start_finite = var_x.is_finite() && var_x != 0.0;
+    for j in 0..k {
+        let snp_trait_cov = s_full[idx(0, j + 1, n)];
+        q_start[j] = (snp_trait_cov - var_x * b * fixed[j]) / var_x;
+        q_start[k + j] = s_full[idx(j + 1, j + 1, n)]
+            - fixed[j] * fixed[j] * psi
+            - (fixed[j] * b + q_start[j]).powi(2) * var_x;
+        q_start_finite &= q_start[j].is_finite() && q_start[k + j].is_finite();
+    }
+    if !q_start_finite {
+        for j in 0..k {
+            q_start[j] = 0.0;
+            q_start[k + j] = main_out[k + j];
+        }
+    }
+
+    let mut q_out = vec![0.0; q_q + k * k + 3];
+    fit_commonfactor_q(
+        k, &s_full, n, n, &v_full, m, m, &w_diag, &fixed, &q_start, max_iter_q, tol, &mut q_out,
+    )?;
+
+    let q_converged = q_out[q_q + k * k + 1] == 1.0;
+    if !q_converged || !q_out[..(q_q + k * k)].iter().all(|v| v.is_finite()) {
+        return Err(KernelError::Singular);
+    }
+
+    let mut gamma_cov = vec![0.0; k * k];
+    for col in 0..k {
+        for row in 0..k {
+            gamma_cov[ridx(row, col, k)] = q_out[q_q + idx(row, col, k)];
+        }
+    }
+
+    let gamma = &q_out[..k];
+    let q_stat = quadratic_form_inverse(&gamma_cov, gamma, k)?;
+    if !q_stat.is_finite() {
+        return Err(KernelError::Singular);
+    }
+
+    out[0] = main_out[k - 1];
+    out[1] = main_out[main_q + k - 1];
+    out[2] = q_stat;
+    out[3] = 1.0;
+    out[4] = 1.0;
+    out[5] = main_out[2 * main_q + 2];
+    out[6] = q_out[q_q + k * k + 2];
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fit_commonfactor_batch(
+    k: usize,
+    s_ld: &[f64],
+    s_ld_nrow: usize,
+    s_ld_ncol: usize,
+    v_ld: &[f64],
+    v_ld_nrow: usize,
+    v_ld_ncol: usize,
+    i_ld: &[f64],
+    i_ld_nrow: usize,
+    i_ld_ncol: usize,
+    beta_snp: &[f64],
+    beta_nrow: usize,
+    beta_ncol: usize,
+    se_snp: &[f64],
+    se_nrow: usize,
+    se_ncol: usize,
+    var_snp: &[f64],
+    coords: &[i32],
+    coords_nrow: usize,
+    coords_ncol: usize,
+    var_snp_se2: f64,
+    gc: GenomicControl,
+    start: &[f64],
+    max_iter_main: usize,
+    max_iter_q: usize,
+    tol: f64,
+    n_threads: usize,
+    out: &mut [f64],
+) -> KernelResult<()> {
+    if k == 0
+        || beta_nrow != se_nrow
+        || beta_ncol < k
+        || se_ncol < k
+        || var_snp.len() != beta_nrow
+        || s_ld.len() != s_ld_nrow * s_ld_ncol
+        || v_ld.len() != v_ld_nrow * v_ld_ncol
+        || i_ld.len() != i_ld_nrow * i_ld_ncol
+        || beta_snp.len() != beta_nrow * beta_ncol
+        || se_snp.len() != se_nrow * se_ncol
+        || coords.len() != coords_nrow * coords_ncol
+        || start.len() != 2 * k + 2
+        || out.len() != beta_nrow * COMMONFACTOR_BATCH_OUT_COLS
+    {
+        return Err(KernelError::BadDimensions);
+    }
+
+    let run = || {
+        use rayon::prelude::*;
+
+        out.par_chunks_mut(COMMONFACTOR_BATCH_OUT_COLS)
+            .enumerate()
+            .for_each(|(i_zero, out_one)| {
+                let result = fit_commonfactor_snp_fast(
+                    k,
+                    s_ld,
+                    s_ld_nrow,
+                    s_ld_ncol,
+                    v_ld,
+                    v_ld_nrow,
+                    v_ld_ncol,
+                    i_ld,
+                    i_ld_nrow,
+                    i_ld_ncol,
+                    beta_snp,
+                    beta_nrow,
+                    beta_ncol,
+                    se_snp,
+                    se_nrow,
+                    se_ncol,
+                    var_snp,
+                    coords,
+                    coords_nrow,
+                    coords_ncol,
+                    var_snp_se2,
+                    gc,
+                    start,
+                    max_iter_main,
+                    max_iter_q,
+                    tol,
+                    i_zero,
+                    out_one,
+                );
+                if result.is_err() {
+                    out_one.fill(f64::NAN);
+                    out_one[3] = 0.0;
+                    out_one[4] = 0.0;
+                }
+            })
+    };
+
+    if n_threads <= 1 {
+        for (i_zero, out_one) in out.chunks_mut(COMMONFACTOR_BATCH_OUT_COLS).enumerate() {
+            let result = fit_commonfactor_snp_fast(
+                k,
+                s_ld,
+                s_ld_nrow,
+                s_ld_ncol,
+                v_ld,
+                v_ld_nrow,
+                v_ld_ncol,
+                i_ld,
+                i_ld_nrow,
+                i_ld_ncol,
+                beta_snp,
+                beta_nrow,
+                beta_ncol,
+                se_snp,
+                se_nrow,
+                se_ncol,
+                var_snp,
+                coords,
+                coords_nrow,
+                coords_ncol,
+                var_snp_se2,
+                gc,
+                start,
+                max_iter_main,
+                max_iter_q,
+                tol,
+                i_zero,
+                out_one,
+            );
+            if result.is_err() {
+                out_one.fill(f64::NAN);
+                out_one[3] = 0.0;
+                out_one[4] = 0.0;
+            }
+        }
+        return Ok(());
+    }
+
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(n_threads)
+        .build()
+        .map_err(|_| KernelError::ThreadPoolBuild)?
+        .install(run);
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn fit_generic_sem(
     obs_n: usize,
     total_n: usize,
@@ -830,15 +1166,7 @@ pub fn fit_generic_sem(
     for iter in 0..max_iter {
         iterations = iter + 1;
         generic_sem_implied(
-            obs_n,
-            total_n,
-            b_fixed,
-            psi_fixed,
-            b_free,
-            psi_free,
-            &p,
-            &mut sigma,
-            None,
+            obs_n, total_n, b_fixed, psi_fixed, b_free, psi_free, &p, &mut sigma, None,
         )?;
         generic_sem_delta_numeric(
             obs_n, total_n, b_fixed, psi_fixed, b_free, psi_free, &p, &sigma, &mut delta,

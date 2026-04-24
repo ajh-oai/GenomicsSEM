@@ -458,6 +458,50 @@ return(S_Full)
   )
 }
 
+.commonfactor_batch_fit_fast <- function(S_LD, V_LD, I_LD, beta_SNP, SE_SNP, varSNP, GC, coords, varSNPSE2,
+                                         start, k, n_threads = 1L, max_iter = 100L, max_iter_q = 500L,
+                                         tol = 1e-10) {
+  if (!.genomicssem_use_rust() || is.null(start)) {
+    return(NULL)
+  }
+
+  out <- tryCatch(
+    .Call(
+      "genomicssem_fit_commonfactor_batch_call",
+      as.integer(k),
+      as.matrix(S_LD),
+      as.matrix(V_LD),
+      as.matrix(I_LD),
+      as.matrix(beta_SNP),
+      as.matrix(SE_SNP),
+      as.numeric(varSNP),
+      as.character(GC),
+      coords,
+      as.numeric(varSNPSE2),
+      as.numeric(start),
+      as.integer(max_iter),
+      as.integer(max_iter_q),
+      as.numeric(tol),
+      as.integer(n_threads),
+      PACKAGE = "GenomicSEM"
+    ),
+    error = function(e) NULL
+  )
+
+  if (is.null(out)) {
+    return(NULL)
+  }
+
+  out <- matrix(out, ncol = 7L, byrow = TRUE)
+  colnames(out) <- c("est", "se_c", "Q", "main_converged", "q_converged", "main_iterations", "q_iterations")
+  if (!all(out[, "main_converged"] == 1) || !all(out[, "q_converged"] == 1) ||
+      !all(is.finite(out[, c("est", "se_c", "Q"), drop = FALSE]))) {
+    return(NULL)
+  }
+
+  out
+}
+
 .sem_fast_numeric_value <- function(x, fallback = 0) {
   x <- suppressWarnings(as.numeric(x))
   ifelse(is.finite(x), x, fallback)

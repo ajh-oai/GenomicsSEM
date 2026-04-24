@@ -474,6 +474,92 @@ SEXP genomicssem_fit_commonfactor_q_call(
   return out;
 }
 
+SEXP genomicssem_fit_commonfactor_batch_call(
+    SEXP k_,
+    SEXP s_ld_,
+    SEXP v_ld_,
+    SEXP i_ld_,
+    SEXP beta_snp_,
+    SEXP se_snp_,
+    SEXP var_snp_,
+    SEXP gc_,
+    SEXP coords_,
+    SEXP var_snp_se2_,
+    SEXP start_,
+    SEXP max_iter_main_,
+    SEXP max_iter_q_,
+    SEXP tol_,
+    SEXP n_threads_) {
+  int nprotect = 0;
+  SEXP s_ld = protect_real_matrix(s_ld_, "S_LD", &nprotect);
+  SEXP v_ld = protect_real_matrix(v_ld_, "V_LD", &nprotect);
+  SEXP i_ld = protect_real_matrix(i_ld_, "I_LD", &nprotect);
+  SEXP beta_snp = protect_real_matrix(beta_snp_, "beta_SNP", &nprotect);
+  SEXP se_snp = protect_real_matrix(se_snp_, "SE_SNP", &nprotect);
+  SEXP var_snp = protect_real_vector(var_snp_, "varSNP", &nprotect);
+  SEXP coords = protect_int_matrix(coords_, "coords", &nprotect);
+  SEXP start = protect_real_vector(start_, "start", &nprotect);
+
+  size_t s_ld_nrow, s_ld_ncol, v_ld_nrow, v_ld_ncol, i_ld_nrow, i_ld_ncol;
+  size_t beta_nrow, beta_ncol, se_nrow, se_ncol, coords_nrow, coords_ncol;
+  matrix_dims(s_ld, "S_LD", &s_ld_nrow, &s_ld_ncol);
+  matrix_dims(v_ld, "V_LD", &v_ld_nrow, &v_ld_ncol);
+  matrix_dims(i_ld, "I_LD", &i_ld_nrow, &i_ld_ncol);
+  matrix_dims(beta_snp, "beta_SNP", &beta_nrow, &beta_ncol);
+  matrix_dims(se_snp, "SE_SNP", &se_nrow, &se_ncol);
+  matrix_dims(coords, "coords", &coords_nrow, &coords_ncol);
+
+  int k_int = scalar_int(k_, "k");
+  int max_iter_main_int = scalar_int(max_iter_main_, "max_iter_main");
+  int max_iter_q_int = scalar_int(max_iter_q_, "max_iter_q");
+  int n_threads_int = scalar_int(n_threads_, "n_threads");
+  if (k_int <= 0 || max_iter_main_int <= 0 || max_iter_q_int <= 0 || n_threads_int <= 0) {
+    Rf_error("'k', iteration counts, and 'n_threads' must be positive");
+  }
+
+  const size_t out_cols = 7;
+  size_t out_len = beta_nrow * out_cols;
+  SEXP out = PROTECT(Rf_allocVector(REALSXP, (R_xlen_t)out_len));
+  ++nprotect;
+
+  int status = genomicssem_fit_commonfactor_batch(
+      (size_t)k_int,
+      REAL(s_ld),
+      s_ld_nrow,
+      s_ld_ncol,
+      REAL(v_ld),
+      v_ld_nrow,
+      v_ld_ncol,
+      REAL(i_ld),
+      i_ld_nrow,
+      i_ld_ncol,
+      REAL(beta_snp),
+      beta_nrow,
+      beta_ncol,
+      REAL(se_snp),
+      se_nrow,
+      se_ncol,
+      REAL(var_snp),
+      (size_t)XLENGTH(var_snp),
+      INTEGER(coords),
+      coords_nrow,
+      coords_ncol,
+      scalar_real(var_snp_se2_, "varSNPSE2"),
+      gc_code(gc_),
+      REAL(start),
+      (size_t)XLENGTH(start),
+      (size_t)max_iter_main_int,
+      (size_t)max_iter_q_int,
+      scalar_real(tol_, "tol"),
+      (size_t)n_threads_int,
+      REAL(out),
+      out_len);
+
+  check_status(status, "genomicssem_fit_commonfactor_batch");
+  UNPROTECT(nprotect);
+  return out;
+}
+
 SEXP genomicssem_fit_generic_sem_call(
     SEXP obs_n_,
     SEXP total_n_,

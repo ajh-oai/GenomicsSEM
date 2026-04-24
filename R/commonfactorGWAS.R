@@ -196,7 +196,60 @@ output from ldsc (using covstruc = ...)  followed by the output from sumstats (u
   } else {
     colnamesresults <- c("i", "lhs", "op", "rhs", "est", "se", "se_c", "Q", "fail", "warning")
   }
-  if(!parallel){
+
+  batch_results <- NULL
+  if(use_fast_commonfactor && !smooth_check && !MPI){
+    batch_threads <- 1L
+    if(parallel){
+      if(is.null(cores)){
+        batch_threads <- min(c(nrow(SNPs2), detectCores() - 1))
+      }else{
+        if (cores > nrow(SNPs2))
+          warning(paste0("Provided number of cores was greater than number of SNPs, reverting to cores=",nrow(SNPs2)))
+        batch_threads <- min(c(nrow(SNPs2), cores))
+      }
+      batch_threads <- max(1L, batch_threads)
+    }
+
+    batch_fit <- .commonfactor_batch_fit_fast(
+      S_LD = S_LD,
+      V_LD = V_LD,
+      I_LD = I_LD,
+      beta_SNP = beta_SNP,
+      SE_SNP = SE_SNP,
+      varSNP = varSNP,
+      GC = GC,
+      coords = coords,
+      varSNPSE2 = varSNPSE2,
+      start = fast_fit_start,
+      k = k,
+      n_threads = batch_threads,
+      max_iter = getOption("GenomicSEM.fast_commonfactor_max_iter", 100L),
+      max_iter_q = getOption("GenomicSEM.fast_commonfactor_q_max_iter", 500L),
+      tol = getOption("GenomicSEM.fast_commonfactor_tol", 1e-10)
+    )
+
+    if(!is.null(batch_fit)){
+      batch_results <- data.frame(
+        i = seq_len(f),
+        lhs = rep("F1", f),
+        op = rep("~", f),
+        rhs = rep("SNP", f),
+        est = batch_fit[, "est"],
+        se = rep(NA_real_, f),
+        se_c = batch_fit[, "se_c"],
+        Q = batch_fit[, "Q"],
+        fail = rep(0, f),
+        warning = rep(0, f),
+        stringsAsFactors = FALSE
+      )
+      colnames(batch_results) <- colnamesresults
+    }
+  }
+
+  if(!is.null(batch_results)){
+    results <- batch_results
+  } else if(!parallel){
     if(smooth_check){
       results <- as.data.frame(matrix(NA, ncol=11, nrow=f))
     } else {
@@ -207,7 +260,7 @@ output from ldsc (using covstruc = ...)  followed by the output from sumstats (u
       results[i, ] <- .commonfactorGWAS_main(i,cores=1, 1, S_LD, V_LD, I_LD, beta_SNP, SE_SNP, varSNP, varSNPSE2, GC, coords, k, smooth_check,Model1, toler, estimation, order, basemodel=LavModel1,fast_fit_start=fast_fit_start)
     }
   }
-  if(parallel){
+  if(is.null(batch_results) && parallel){
     if(is.null(cores)){
       ##if no default provided use 1 less than the total number of cores available so your computer will still function
       int <- min(c(nrow(SNPs2), detectCores() - 1))
@@ -250,6 +303,7 @@ output from ldsc (using covstruc = ...)  followed by the output from sumstats (u
       utilfuncs[[".diag_inverse_from_values"]] <- .diag_inverse_from_values
       utilfuncs[[".commonfactor_fit_fast"]] <- .commonfactor_fit_fast
       utilfuncs[[".commonfactor_q_fit_fast"]] <- .commonfactor_q_fit_fast
+      utilfuncs[[".commonfactor_batch_fit_fast"]] <- .commonfactor_batch_fit_fast
       results <- foreach(n = icount(int), .combine = 'rbind') %:%
         foreach (i=1:nrow(beta_SNP[[n]]), .combine='rbind', .packages = c("lavaan", "gdata"),
                  .export=c(".commonfactorGWAS_main")) %dopar% {
