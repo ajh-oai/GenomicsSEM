@@ -13,6 +13,7 @@ if (requireNamespace("GenomicSEM", quietly = TRUE)) {
 
 genomicssem_ns <- asNamespace("GenomicSEM")
 .ldsc_block_products <- get(".ldsc_block_products", envir = genomicssem_ns)
+.ldsc_block_products_r <- get(".ldsc_block_products_r", envir = genomicssem_ns)
 .ldsc_read_table <- get(".ldsc_read_table", envir = genomicssem_ns)
 .ldsc_read_chromosome_tables <- get(".ldsc_read_chromosome_tables", envir = genomicssem_ns)
 .ldsc_read_m_files <- get(".ldsc_read_m_files", envir = genomicssem_ns)
@@ -209,11 +210,31 @@ bench_ldsc_blocks <- function() {
     list(xty = xty.block.values, xtx = xtx.block.values)
   }
 
+  old_opt <- getOption("GenomicSEM.fast_ldsc_blocks")
+  old_threads_opt <- getOption("GenomicSEM.fast_ldsc_threads")
+  on.exit(options(
+    GenomicSEM.fast_ldsc_blocks = old_opt,
+    GenomicSEM.fast_ldsc_threads = old_threads_opt
+  ), add = TRUE)
+
   old <- time_expr(old_loop())
-  fast <- time_expr(.ldsc_block_products(weighted.LD, weighted.chi, n_blocks))
+  r_helper <- time_expr(.ldsc_block_products_r(weighted.LD, weighted.chi, n_blocks))
+  cores <- parallel::detectCores()
+  if (is.na(cores)) {
+    cores <- 1L
+  }
+  thread_counts <- unique(c(1L, min(4L, max(1L, cores - 1L))))
+  fast <- lapply(thread_counts, function(n_threads) {
+    options(GenomicSEM.fast_ldsc_blocks = TRUE, GenomicSEM.fast_ldsc_threads = n_threads)
+    time_expr(.ldsc_block_products(weighted.LD, weighted.chi, n_blocks))
+  })
 
   data.frame(
-    workflow = c("ldsc_block_old_loop", "ldsc_block_fast"),
+    workflow = c(
+      "ldsc_block_old_loop",
+      "ldsc_block_r_helper",
+      paste0("ldsc_block_rust_", thread_counts, "t")
+    ),
     fast_table_read = NA,
     fast_snp_join = NA,
     fast_prep_qc = NA,
@@ -222,8 +243,14 @@ bench_ldsc_blocks <- function() {
     n_traits = NA_integer_,
     n_annot = n_annot,
     n_blocks = n_blocks,
-    elapsed_sec = c(old$elapsed, fast$elapsed),
-    checksum = c(sum(old$value$xty, old$value$xtx), sum(fast$value$xty.block.values, fast$value$xtx.block.values)),
+    elapsed_sec = c(old$elapsed, r_helper$elapsed, vapply(fast, function(x) x$elapsed, numeric(1))),
+    checksum = c(
+      sum(old$value$xty, old$value$xtx),
+      sum(r_helper$value$xty.block.values, r_helper$value$xtx.block.values),
+      vapply(fast, function(x) {
+        sum(x$value$xty.block.values, x$value$xtx.block.values)
+      }, numeric(1))
+    ),
     stringsAsFactors = FALSE
   )
 }

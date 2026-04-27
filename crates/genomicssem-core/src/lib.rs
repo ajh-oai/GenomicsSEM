@@ -106,8 +106,7 @@ fn normal_quantile(p: f64) -> f64 {
     if p <= P_HIGH {
         let q = p - 0.5;
         let r = q * q;
-        return (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5])
-            * q
+        return (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5]) * q
             / (((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r + 1.0);
     }
 
@@ -410,7 +409,11 @@ pub fn sumstats_qc(
         }
 
         let maf_raw = maf_file.map(|x| x[i]).unwrap_or(maf_ref[i]);
-        let maf = if maf_raw > 0.5 { 1.0 - maf_raw } else { maf_raw };
+        let maf = if maf_raw > 0.5 {
+            1.0 - maf_raw
+        } else {
+            maf_raw
+        };
         if maf_file.is_some() && (maf == 0.0 || maf == 1.0 || !maf.is_finite()) {
             out.counts[2] += 1;
             continue;
@@ -476,13 +479,16 @@ pub fn sumstats_qc(
         let (beta_out, se_out) = if ols {
             (effect_i, (effect_i / z).abs())
         } else if linprob {
-            let denom = ((effect_i * effect_i) * var_snp + std::f64::consts::PI.powi(2) / 3.0).sqrt();
+            let denom =
+                ((effect_i * effect_i) * var_snp + std::f64::consts::PI.powi(2) / 3.0).sqrt();
             (effect_i / denom, se_i / denom)
         } else if se_logit {
-            let denom = ((effect_i * effect_i) * var_snp + std::f64::consts::PI.powi(2) / 3.0).sqrt();
+            let denom =
+                ((effect_i * effect_i) * var_snp + std::f64::consts::PI.powi(2) / 3.0).sqrt();
             (effect_i / denom, se_i / denom)
         } else {
-            let denom = ((effect_i * effect_i) * var_snp + std::f64::consts::PI.powi(2) / 3.0).sqrt();
+            let denom =
+                ((effect_i * effect_i) * var_snp + std::f64::consts::PI.powi(2) / 3.0).sqrt();
             (effect_i / denom, (se_i / effect_i.exp()) / denom)
         };
 
@@ -501,6 +507,181 @@ pub fn sumstats_qc(
     }
 
     Ok(out_n)
+}
+
+fn ldsc_block_bounds(n_snps: usize, n_blocks: usize, block: usize) -> Option<(usize, usize)> {
+    let from_one =
+        (1.0 + (block as f64) * ((n_snps as f64) - 1.0) / (n_blocks as f64)).floor() as usize;
+    let to_one = if block + 1 == n_blocks {
+        n_snps
+    } else {
+        (1.0 + ((block + 1) as f64) * ((n_snps as f64) - 1.0) / (n_blocks as f64)).floor() as usize
+            - 1
+    };
+
+    if from_one == 0 || to_one < from_one {
+        return None;
+    }
+
+    Some((from_one - 1, to_one))
+}
+
+fn compute_ldsc_block_products(
+    weighted_ld: &[f64],
+    n_snps: usize,
+    n_annot: usize,
+    weighted_chi: &[f64],
+    start: usize,
+    end: usize,
+    xty: &mut [f64],
+    xtx: &mut [f64],
+) {
+    xty.fill(0.0);
+    xtx.fill(0.0);
+
+    for col in 0..n_annot {
+        let x_col = &weighted_ld[idx(start, col, n_snps)..idx(end, col, n_snps)];
+
+        let mut xy = 0.0;
+        for row_offset in 0..x_col.len() {
+            xy += x_col[row_offset] * weighted_chi[start + row_offset];
+        }
+        xty[col] = xy;
+
+        for col2 in col..n_annot {
+            let x_col2 = &weighted_ld[idx(start, col2, n_snps)..idx(end, col2, n_snps)];
+            let mut xx = 0.0;
+            for row_offset in 0..x_col.len() {
+                xx += x_col[row_offset] * x_col2[row_offset];
+            }
+            xtx[idx(col, col2, n_annot)] = xx;
+            if col2 != col {
+                xtx[idx(col2, col, n_annot)] = xx;
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn ldsc_block_products(
+    weighted_ld: &[f64],
+    n_snps: usize,
+    n_annot: usize,
+    weighted_chi: &[f64],
+    n_blocks: usize,
+    xty_block: &mut [f64],
+    xtx_block: &mut [f64],
+    xty: &mut [f64],
+    xtx: &mut [f64],
+    n_threads: usize,
+) -> KernelResult<()> {
+    if weighted_ld.len() != n_snps * n_annot
+        || weighted_chi.len() != n_snps
+        || xty_block.len() != n_blocks * n_annot
+        || xtx_block.len() != n_blocks * n_annot * n_annot
+        || xty.len() != n_annot
+        || xtx.len() != n_annot * n_annot
+        || n_blocks == 0
+        || n_snps == 0
+        || n_annot == 0
+    {
+        return Err(KernelError::BadDimensions);
+    }
+
+    xty_block.fill(0.0);
+    xtx_block.fill(0.0);
+    xty.fill(0.0);
+    xtx.fill(0.0);
+
+    if n_threads <= 1 {
+        let mut block_xty = vec![0.0; n_annot];
+        let mut block_xtx = vec![0.0; n_annot * n_annot];
+        for block in 0..n_blocks {
+            let Some((start, end)) = ldsc_block_bounds(n_snps, n_blocks, block) else {
+                continue;
+            };
+            compute_ldsc_block_products(
+                weighted_ld,
+                n_snps,
+                n_annot,
+                weighted_chi,
+                start,
+                end,
+                &mut block_xty,
+                &mut block_xtx,
+            );
+            copy_ldsc_block(
+                block, n_blocks, n_annot, &block_xty, &block_xtx, xty_block, xtx_block, xty, xtx,
+            );
+        }
+        return Ok(());
+    }
+
+    let run = || {
+        use rayon::prelude::*;
+
+        (0..n_blocks)
+            .into_par_iter()
+            .map(|block| {
+                let mut block_xty = vec![0.0; n_annot];
+                let mut block_xtx = vec![0.0; n_annot * n_annot];
+                if let Some((start, end)) = ldsc_block_bounds(n_snps, n_blocks, block) {
+                    compute_ldsc_block_products(
+                        weighted_ld,
+                        n_snps,
+                        n_annot,
+                        weighted_chi,
+                        start,
+                        end,
+                        &mut block_xty,
+                        &mut block_xtx,
+                    );
+                }
+                (block, block_xty, block_xtx)
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let blocks = rayon::ThreadPoolBuilder::new()
+        .num_threads(n_threads)
+        .build()
+        .map_err(|_| KernelError::ThreadPoolBuild)?
+        .install(run);
+
+    for (block, block_xty, block_xtx) in blocks {
+        copy_ldsc_block(
+            block, n_blocks, n_annot, &block_xty, &block_xtx, xty_block, xtx_block, xty, xtx,
+        );
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn copy_ldsc_block(
+    block: usize,
+    n_blocks: usize,
+    n_annot: usize,
+    block_xty: &[f64],
+    block_xtx: &[f64],
+    xty_block: &mut [f64],
+    xtx_block: &mut [f64],
+    xty: &mut [f64],
+    xtx: &mut [f64],
+) {
+    for col in 0..n_annot {
+        let value = block_xty[col];
+        xty_block[idx(block, col, n_blocks)] = value;
+        xty[col] += value;
+    }
+
+    for col2 in 0..n_annot {
+        for col in 0..n_annot {
+            let value = block_xtx[idx(col, col2, n_annot)];
+            xtx_block[idx(block * n_annot + col, col2, n_blocks * n_annot)] = value;
+            xtx[idx(col, col2, n_annot)] += value;
+        }
+    }
 }
 
 fn vech_index(row: usize, col: usize, n: usize) -> usize {

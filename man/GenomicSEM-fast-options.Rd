@@ -15,6 +15,8 @@ The Rust backend is used automatically for low-level matrix kernels when availab
   \item \code{GenomicSEM.fast_munge_qc}: use the native Rust row-QC and Z-score transform kernel inside supported \code{munge()} runs. Enabled by default when the native library is available.
   \item \code{GenomicSEM.fast_sumstats_qc}: use the native Rust row-QC, allele flip, Z-score, and beta/SE transform kernel inside supported \code{sumstats()} runs. Enabled by default when the native library is available.
   \item \code{GenomicSEM.fast_ldsc_read}: use \code{data.table::fread()} for \code{ldsc()} and \code{s_ldsc()} chromosome, weight, M, and trait summary-stat table ingestion. Enabled by default.
+  \item \code{GenomicSEM.fast_ldsc_blocks}: use the native Rust block crossproduct kernel inside \code{ldsc()} and \code{s_ldsc()} jackknife setup. Enabled by default when the native library is available.
+  \item \code{GenomicSEM.fast_ldsc_threads}: number of Rust worker threads for the LDSC block crossproduct kernel. Defaults to up to 4 local cores.
   \item \code{GenomicSEM.fast_snp_join}: use the experimental fast SNP join helper in prep paths. Disabled by default because local benchmarks did not show a stable gain over the existing joins.
   \item \code{GenomicSEM.fast_diagnostics}: print whether a fast path was used or why a requested fast path fell back.
   \item \code{GenomicSEM.fast_strict}: error instead of falling back when a requested batched fast path is unavailable.

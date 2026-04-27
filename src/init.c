@@ -133,6 +133,11 @@ extern SEXP genomicssem_sumstats_qc_call(
     SEXP beta_is_character_,
     SEXP linprob_,
     SEXP se_logit_);
+extern SEXP genomicssem_ldsc_block_products_call(
+    SEXP weighted_ld_,
+    SEXP weighted_chi_,
+    SEXP n_blocks_,
+    SEXP n_threads_);
 
 static const R_CallMethodDef CallEntries[] = {
     {"genomicssem_get_v_snp_call", (DL_FUNC)&genomicssem_get_v_snp_call, 7},
@@ -147,6 +152,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"genomicssem_fit_generic_sem_batch_call", (DL_FUNC)&genomicssem_fit_generic_sem_batch_call, 23},
     {"genomicssem_munge_qc_call", (DL_FUNC)&genomicssem_munge_qc_call, 10},
     {"genomicssem_sumstats_qc_call", (DL_FUNC)&genomicssem_sumstats_qc_call, 16},
+    {"genomicssem_ldsc_block_products_call", (DL_FUNC)&genomicssem_ldsc_block_products_call, 4},
     {NULL, NULL, 0}
 };
 

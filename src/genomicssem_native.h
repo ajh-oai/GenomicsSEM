@@ -274,4 +274,21 @@ int genomicssem_sumstats_qc(
     size_t counts_len,
     size_t *out_count);
 
+int genomicssem_ldsc_block_products(
+    const double *weighted_ld,
+    size_t n_snps,
+    size_t n_annot,
+    const double *weighted_chi,
+    size_t chi_len,
+    size_t n_blocks,
+    double *xty_block,
+    size_t xty_block_len,
+    double *xtx_block,
+    size_t xtx_block_len,
+    double *xty,
+    size_t xty_len,
+    double *xtx,
+    size_t xtx_len,
+    size_t n_threads);
+
 #endif

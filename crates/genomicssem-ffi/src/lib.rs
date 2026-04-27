@@ -3,7 +3,8 @@
 use genomicssem_core::{
     fill_s_full, fill_v_full, fill_v_snp, fill_v_snp_batch, fill_z_pre, fit_commonfactor_batch,
     fit_commonfactor_main, fit_commonfactor_q, fit_generic_sem, fit_generic_sem_batch,
-    munge_qc, sumstats_qc, GenomicControl, KernelError, MungeQcOutput, SumstatsQcOutput,
+    ldsc_block_products, munge_qc, sumstats_qc, GenomicControl, KernelError, MungeQcOutput,
+    SumstatsQcOutput,
 };
 use std::slice;
 
@@ -746,6 +747,49 @@ pub unsafe extern "C" fn genomicssem_sumstats_qc(
             &mut out,
         )?;
         Ok(())
+    })();
+
+    result.map(|()| OK).unwrap_or_else(code)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn genomicssem_ldsc_block_products(
+    weighted_ld: *const f64,
+    n_snps: usize,
+    n_annot: usize,
+    weighted_chi: *const f64,
+    chi_len: usize,
+    n_blocks: usize,
+    xty_block: *mut f64,
+    xty_block_len: usize,
+    xtx_block: *mut f64,
+    xtx_block_len: usize,
+    xty: *mut f64,
+    xty_len: usize,
+    xtx: *mut f64,
+    xtx_len: usize,
+    n_threads: usize,
+) -> i32 {
+    let result = (|| {
+        let weighted_ld = checked_slice(weighted_ld, n_snps * n_annot)?;
+        let weighted_chi = checked_slice(weighted_chi, chi_len)?;
+        let xty_block = checked_slice_mut(xty_block, xty_block_len)?;
+        let xtx_block = checked_slice_mut(xtx_block, xtx_block_len)?;
+        let xty = checked_slice_mut(xty, xty_len)?;
+        let xtx = checked_slice_mut(xtx, xtx_len)?;
+
+        ldsc_block_products(
+            weighted_ld,
+            n_snps,
+            n_annot,
+            weighted_chi,
+            n_blocks,
+            xty_block,
+            xtx_block,
+            xty,
+            xtx,
+            n_threads,
+        )
     })();
 
     result.map(|()| OK).unwrap_or_else(code)

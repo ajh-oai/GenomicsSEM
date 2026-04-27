@@ -400,7 +400,7 @@ return(S_Full)
   as.data.frame(rbindlist(tables, use.names = TRUE, fill = TRUE))
 }
 
-.ldsc_block_products <- function(weighted.LD, weighted.chi, n.blocks) {
+.ldsc_block_products_r <- function(weighted.LD, weighted.chi, n.blocks) {
   weighted.LD <- as.matrix(weighted.LD)
   weighted.chi <- as.numeric(weighted.chi)
 
@@ -437,6 +437,49 @@ return(S_Full)
     delete.from = seq(from = 1, to = nrow(xtx.block.values), by = n.annot),
     delete.to = seq(from = n.annot, to = nrow(xtx.block.values), by = n.annot)
   )
+}
+
+.ldsc_block_products <- function(weighted.LD, weighted.chi, n.blocks) {
+  if (!.genomicssem_use_rust() || !isTRUE(getOption("GenomicSEM.fast_ldsc_blocks", TRUE))) {
+    return(.ldsc_block_products_r(weighted.LD, weighted.chi, n.blocks))
+  }
+
+  weighted.LD <- as.matrix(weighted.LD)
+  weighted.chi <- as.numeric(weighted.chi)
+  n.blocks <- as.integer(n.blocks)
+  n.threads <- getOption("GenomicSEM.fast_ldsc_threads", NA_integer_)[1]
+  if (is.null(n.threads) || is.na(n.threads)) {
+    cores <- detectCores()
+    if (is.na(cores)) {
+      cores <- 1L
+    }
+    n.threads <- min(4L, max(1L, cores - 1L))
+  }
+  n.threads <- as.integer(n.threads)
+
+  if (is.na(n.blocks) || n.blocks <= 0L || is.na(n.threads) || n.threads <= 0L ||
+      nrow(weighted.LD) == 0L || ncol(weighted.LD) == 0L || n.blocks > nrow(weighted.LD)) {
+    return(.ldsc_block_products_r(weighted.LD, weighted.chi, n.blocks))
+  }
+
+  out <- .Call(
+    "genomicssem_ldsc_block_products_call",
+    weighted.LD,
+    weighted.chi,
+    n.blocks,
+    n.threads,
+    PACKAGE = "GenomicSEM"
+  )
+
+  annot.names <- colnames(weighted.LD)
+  if (!is.null(annot.names)) {
+    colnames(out$xty.block.values) <- annot.names
+    colnames(out$xtx.block.values) <- annot.names
+    rownames(out$xty) <- annot.names
+    colnames(out$xtx) <- annot.names
+  }
+
+  out
 }
 
 .get_V_full_r <- .get_V_full

@@ -846,3 +846,41 @@ Interpretation:
 - The combined fread + Rust QC path improves the 100k-SNP/2-trait synthetic `sumstats()` run `1.376s -> 0.185s`, about `7.4x`.
 - The same combined path improves `munge()` `1.838s -> 0.987s`, about `1.9x`; output gzip/write time is now a larger share of the remaining runtime.
 - The experimental SNP join is still mixed: it helps `munge()` in this run but hurts `sumstats()`, so it remains disabled by default.
+
+## 2026-04-27 16:15 PDT - Native LDSC block crossproducts
+
+Change set:
+
+- Added a Rust `.Call` path for the shared `.ldsc_block_products()` helper used by both `ldsc()` and `s_ldsc()`.
+- Preserved the R helper as `.ldsc_block_products_r` and added `options(GenomicSEM.fast_ldsc_blocks=TRUE)` as the default native gate.
+- Added `options(GenomicSEM.fast_ldsc_threads=...)`; when unset, the native helper uses up to 4 local Rust worker threads.
+- Profiling note: the first naive row-major Rust block loop was slower than R's `crossprod()` helper on a 200k-SNP, 21-column block benchmark (`0.050s` native vs `0.013s` R helper), because the R helper was using BLAS. Rewrote the Rust kernel to work by contiguous columns and parallelize over jackknife blocks.
+
+Validation:
+
+```sh
+cargo test --workspace
+R CMD INSTALL --install-tests .
+Rscript tests/prep-fast-path.R
+Rscript benches/bench_prep_fast_paths.R 100000 2 1 200 1
+Rscript benches/bench_prep_fast_paths.R 200000 2 20 200 2
+```
+
+Local benchmark summary:
+
+| workflow | n_snp | n_annot_arg | n_blocks | elapsed_sec | checksum |
+|---|---:|---:|---:|---:|---:|
+| ldsc_block_old_loop | 100000 | 1 | 200 | 0.002 | 199734.4 |
+| ldsc_block_r_helper | 100000 | 1 | 200 | 0.001 | 199734.4 |
+| ldsc_block_rust_1t | 100000 | 1 | 200 | 0.000 | 199734.4 |
+| ldsc_block_rust_4t | 100000 | 1 | 200 | 0.000 | 199734.4 |
+| ldsc_block_old_loop | 200000 | 20 | 200 | 0.025 | 4203209 |
+| ldsc_block_r_helper | 200000 | 20 | 200 | 0.014 | 4203209 |
+| ldsc_block_rust_1t | 200000 | 20 | 200 | 0.026 | 4203209 |
+| ldsc_block_rust_4t | 200000 | 20 | 200 | 0.007 | 4203209 |
+
+Interpretation:
+
+- For the one-annotation synthetic case, the block setup is too small to measure reliably, but the native path does not move the total `ldsc()`/`s_ldsc()` reader benchmark.
+- For a wider annotation matrix, the single-thread native loop is not better than BLAS-backed R, but the 4-thread Rust path is about `2x` faster than the direct R helper and about `3.6x` faster than the explicit old loop.
+- This is a targeted `ldsc()`/`s_ldsc()` setup optimization, not a full Rust rewrite of the LDSC regression/jackknife solve.

@@ -2,6 +2,7 @@ library(GenomicSEM)
 
 genomicssem_ns <- asNamespace("GenomicSEM")
 .ldsc_block_products <- get(".ldsc_block_products", envir = genomicssem_ns)
+.ldsc_block_products_r <- get(".ldsc_block_products_r", envir = genomicssem_ns)
 .read_sumstats_table <- get(".read_sumstats_table", envir = genomicssem_ns)
 .ldsc_read_chromosome_tables <- get(".ldsc_read_chromosome_tables", envir = genomicssem_ns)
 .ldsc_read_m_files <- get(".ldsc_read_m_files", envir = genomicssem_ns)
@@ -27,7 +28,15 @@ check_block_products <- function() {
   colnames(weighted.LD) <- paste0("A", seq_len(ncol(weighted.LD)))
   n.blocks <- 23
 
+  old_opt <- getOption("GenomicSEM.fast_ldsc_blocks")
+  on.exit(options(GenomicSEM.fast_ldsc_blocks = old_opt), add = TRUE)
+
+  options(GenomicSEM.fast_ldsc_blocks = FALSE)
+  fallback <- .ldsc_block_products(weighted.LD, weighted.chi, n.blocks)
+
+  options(GenomicSEM.fast_ldsc_blocks = TRUE)
   fast <- .ldsc_block_products(weighted.LD, weighted.chi, n.blocks)
+  direct_r <- .ldsc_block_products_r(weighted.LD, weighted.chi, n.blocks)
 
   select.from <- floor(seq(from = 1, to = nrow(weighted.LD), length.out = n.blocks + 1))
   select.to <- c(select.from[2:n.blocks] - 1, nrow(weighted.LD))
@@ -42,8 +51,13 @@ check_block_products <- function() {
     xtx.block.values[replace.from[i]:replace.to[i], ] <- t(weighted.LD[rows, ]) %*% weighted.LD[rows, ]
   }
 
+  stopifnot(identical(fallback, direct_r))
   stopifnot(max(abs(xty.block.values - fast$xty.block.values)) < 1e-10)
   stopifnot(max(abs(xtx.block.values - fast$xtx.block.values)) < 1e-10)
+  stopifnot(max(abs(fallback$xty.block.values - fast$xty.block.values)) < 1e-10)
+  stopifnot(max(abs(fallback$xtx.block.values - fast$xtx.block.values)) < 1e-10)
+  stopifnot(identical(fallback$delete.from, fast$delete.from))
+  stopifnot(identical(fallback$delete.to, fast$delete.to))
 }
 
 check_reader_preserves_p_character <- function() {

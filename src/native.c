@@ -965,3 +965,81 @@ SEXP genomicssem_sumstats_qc_call(
   UNPROTECT(nprotect);
   return out;
 }
+
+SEXP genomicssem_ldsc_block_products_call(
+    SEXP weighted_ld_,
+    SEXP weighted_chi_,
+    SEXP n_blocks_,
+    SEXP n_threads_) {
+  int nprotect = 0;
+  SEXP weighted_ld = protect_real_matrix(weighted_ld_, "weighted.LD", &nprotect);
+  SEXP weighted_chi = protect_real_vector(weighted_chi_, "weighted.chi", &nprotect);
+
+  size_t n_snps, n_annot;
+  matrix_dims(weighted_ld, "weighted.LD", &n_snps, &n_annot);
+
+  int n_blocks_int = scalar_int(n_blocks_, "n.blocks");
+  if (n_blocks_int <= 0) {
+    Rf_error("'n.blocks' must be positive");
+  }
+  if ((size_t)XLENGTH(weighted_chi) != n_snps) {
+    Rf_error("'weighted.chi' must have one value per row of 'weighted.LD'");
+  }
+  int n_threads_int = scalar_int(n_threads_, "n.threads");
+  if (n_threads_int <= 0) {
+    Rf_error("'n.threads' must be positive");
+  }
+
+  SEXP xty_block = PROTECT(Rf_allocMatrix(REALSXP, n_blocks_int, (int)n_annot));
+  SEXP xtx_block = PROTECT(Rf_allocMatrix(REALSXP, n_blocks_int * (int)n_annot, (int)n_annot));
+  SEXP xty = PROTECT(Rf_allocMatrix(REALSXP, (int)n_annot, 1));
+  SEXP xtx = PROTECT(Rf_allocMatrix(REALSXP, (int)n_annot, (int)n_annot));
+  nprotect += 4;
+
+  int status = genomicssem_ldsc_block_products(
+      REAL(weighted_ld),
+      n_snps,
+      n_annot,
+      REAL(weighted_chi),
+      (size_t)XLENGTH(weighted_chi),
+      (size_t)n_blocks_int,
+      REAL(xty_block),
+      (size_t)XLENGTH(xty_block),
+      REAL(xtx_block),
+      (size_t)XLENGTH(xtx_block),
+      REAL(xty),
+      (size_t)XLENGTH(xty),
+      REAL(xtx),
+      (size_t)XLENGTH(xtx),
+      (size_t)n_threads_int);
+
+  check_status(status, "genomicssem_ldsc_block_products");
+
+  SEXP delete_from = PROTECT(Rf_allocVector(REALSXP, n_blocks_int));
+  SEXP delete_to = PROTECT(Rf_allocVector(INTSXP, n_blocks_int));
+  nprotect += 2;
+  for (int i = 0; i < n_blocks_int; ++i) {
+    REAL(delete_from)[i] = (double)(i * (int)n_annot + 1);
+    INTEGER(delete_to)[i] = (i + 1) * (int)n_annot;
+  }
+
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 6));
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 6));
+  nprotect += 2;
+  SET_VECTOR_ELT(out, 0, xty_block);
+  SET_VECTOR_ELT(out, 1, xtx_block);
+  SET_VECTOR_ELT(out, 2, xty);
+  SET_VECTOR_ELT(out, 3, xtx);
+  SET_VECTOR_ELT(out, 4, delete_from);
+  SET_VECTOR_ELT(out, 5, delete_to);
+  SET_STRING_ELT(names, 0, Rf_mkChar("xty.block.values"));
+  SET_STRING_ELT(names, 1, Rf_mkChar("xtx.block.values"));
+  SET_STRING_ELT(names, 2, Rf_mkChar("xty"));
+  SET_STRING_ELT(names, 3, Rf_mkChar("xtx"));
+  SET_STRING_ELT(names, 4, Rf_mkChar("delete.from"));
+  SET_STRING_ELT(names, 5, Rf_mkChar("delete.to"));
+  Rf_setAttrib(out, R_NamesSymbol, names);
+
+  UNPROTECT(nprotect);
+  return out;
+}
