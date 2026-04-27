@@ -80,10 +80,29 @@ static SEXP protect_int_matrix(SEXP x, const char *name, int *nprotect) {
   return out;
 }
 
+static SEXP protect_int_vector(SEXP x, const char *name, int *nprotect) {
+  if (!Rf_isInteger(x) || Rf_isMatrix(x)) {
+    if (!Rf_isNumeric(x) || Rf_isMatrix(x)) {
+      Rf_error("'%s' must be an integer vector", name);
+    }
+    ++(*nprotect);
+    return PROTECT(Rf_coerceVector(x, INTSXP));
+  }
+  return x;
+}
+
 static int scalar_int(SEXP x, const char *name) {
   int value = Rf_asInteger(x);
   if (value == NA_INTEGER) {
     Rf_error("'%s' must be an integer scalar", name);
+  }
+  return value;
+}
+
+static int scalar_logical(SEXP x, const char *name) {
+  int value = Rf_asLogical(x);
+  if (value == NA_LOGICAL) {
+    Rf_error("'%s' must be TRUE or FALSE", name);
   }
   return value;
 }
@@ -762,6 +781,187 @@ SEXP genomicssem_fit_generic_sem_batch_call(
       out_len);
 
   check_status(status, "genomicssem_fit_generic_sem_batch");
+  UNPROTECT(nprotect);
+  return out;
+}
+
+SEXP genomicssem_munge_qc_call(
+    SEXP a1_ref_,
+    SEXP a2_ref_,
+    SEXP a1_file_,
+    SEXP a2_file_,
+    SEXP effect_,
+    SEXP p_,
+    SEXP info_,
+    SEXP maf_,
+    SEXP info_filter_,
+    SEXP maf_filter_) {
+  int nprotect = 0;
+  SEXP a1_ref = protect_int_vector(a1_ref_, "A1.x", &nprotect);
+  SEXP a2_ref = protect_int_vector(a2_ref_, "A2.x", &nprotect);
+  SEXP a1_file = protect_int_vector(a1_file_, "A1.y", &nprotect);
+  SEXP a2_file = protect_int_vector(a2_file_, "A2.y", &nprotect);
+  SEXP effect = protect_real_vector(effect_, "effect", &nprotect);
+  SEXP p = protect_real_vector(p_, "P", &nprotect);
+  SEXP info = protect_real_vector(info_, "INFO", &nprotect);
+  SEXP maf = protect_real_vector(maf_, "MAF", &nprotect);
+
+  R_xlen_t n_xlen = XLENGTH(effect);
+  if (XLENGTH(a1_ref) != n_xlen || XLENGTH(a2_ref) != n_xlen ||
+      XLENGTH(a1_file) != n_xlen || XLENGTH(a2_file) != n_xlen || XLENGTH(p) != n_xlen) {
+    Rf_error("munge QC inputs must have the same length");
+  }
+  if (XLENGTH(info) != 0 && XLENGTH(info) != n_xlen) {
+    Rf_error("'INFO' must be empty or match 'effect' length");
+  }
+  if (XLENGTH(maf) != 0 && XLENGTH(maf) != n_xlen) {
+    Rf_error("'MAF' must be empty or match 'effect' length");
+  }
+
+  SEXP keep = PROTECT(Rf_allocVector(INTSXP, n_xlen));
+  SEXP z = PROTECT(Rf_allocVector(REALSXP, n_xlen));
+  SEXP counts = PROTECT(Rf_allocVector(INTSXP, 8));
+  nprotect += 3;
+
+  size_t out_count = 0;
+  int status = genomicssem_munge_qc(
+      INTEGER(a1_ref),
+      INTEGER(a2_ref),
+      INTEGER(a1_file),
+      INTEGER(a2_file),
+      REAL(effect),
+      REAL(p),
+      (size_t)n_xlen,
+      XLENGTH(info) == 0 ? NULL : REAL(info),
+      (size_t)XLENGTH(info),
+      XLENGTH(maf) == 0 ? NULL : REAL(maf),
+      (size_t)XLENGTH(maf),
+      scalar_real(info_filter_, "info.filter"),
+      scalar_real(maf_filter_, "maf.filter"),
+      INTEGER(keep),
+      REAL(z),
+      (size_t)n_xlen,
+      INTEGER(counts),
+      8,
+      &out_count);
+
+  check_status(status, "genomicssem_munge_qc");
+
+  SEXP out_count_sexp = PROTECT(Rf_ScalarInteger((int)out_count));
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 4));
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 4));
+  nprotect += 3;
+  SET_VECTOR_ELT(out, 0, keep);
+  SET_VECTOR_ELT(out, 1, z);
+  SET_VECTOR_ELT(out, 2, counts);
+  SET_VECTOR_ELT(out, 3, out_count_sexp);
+  SET_STRING_ELT(names, 0, Rf_mkChar("keep"));
+  SET_STRING_ELT(names, 1, Rf_mkChar("z"));
+  SET_STRING_ELT(names, 2, Rf_mkChar("counts"));
+  SET_STRING_ELT(names, 3, Rf_mkChar("n"));
+  Rf_setAttrib(out, R_NamesSymbol, names);
+
+  UNPROTECT(nprotect);
+  return out;
+}
+
+SEXP genomicssem_sumstats_qc_call(
+    SEXP a1_ref_,
+    SEXP a2_ref_,
+    SEXP a1_file_,
+    SEXP a2_file_,
+    SEXP effect_,
+    SEXP se_,
+    SEXP p_,
+    SEXP n_values_,
+    SEXP maf_ref_,
+    SEXP maf_file_,
+    SEXP info_,
+    SEXP info_filter_,
+    SEXP ols_,
+    SEXP beta_is_character_,
+    SEXP linprob_,
+    SEXP se_logit_) {
+  int nprotect = 0;
+  SEXP a1_ref = protect_int_vector(a1_ref_, "A1.x", &nprotect);
+  SEXP a2_ref = protect_int_vector(a2_ref_, "A2.x", &nprotect);
+  SEXP a1_file = protect_int_vector(a1_file_, "A1.y", &nprotect);
+  SEXP a2_file = protect_int_vector(a2_file_, "A2.y", &nprotect);
+  SEXP effect = protect_real_vector(effect_, "effect", &nprotect);
+  SEXP se = protect_real_vector(se_, "SE", &nprotect);
+  SEXP p = protect_real_vector(p_, "P", &nprotect);
+  SEXP n_values = protect_real_vector(n_values_, "N", &nprotect);
+  SEXP maf_ref = protect_real_vector(maf_ref_, "MAF", &nprotect);
+  SEXP maf_file = protect_real_vector(maf_file_, "MAF.y", &nprotect);
+  SEXP info = protect_real_vector(info_, "INFO", &nprotect);
+
+  R_xlen_t n_xlen = XLENGTH(effect);
+  if (XLENGTH(a1_ref) != n_xlen || XLENGTH(a2_ref) != n_xlen ||
+      XLENGTH(a1_file) != n_xlen || XLENGTH(a2_file) != n_xlen ||
+      XLENGTH(se) != n_xlen || XLENGTH(p) != n_xlen ||
+      XLENGTH(n_values) != n_xlen || XLENGTH(maf_ref) != n_xlen) {
+    Rf_error("sumstats QC inputs must have the same length");
+  }
+  if (XLENGTH(maf_file) != 0 && XLENGTH(maf_file) != n_xlen) {
+    Rf_error("'MAF.y' must be empty or match 'effect' length");
+  }
+  if (XLENGTH(info) != 0 && XLENGTH(info) != n_xlen) {
+    Rf_error("'INFO' must be empty or match 'effect' length");
+  }
+
+  SEXP keep = PROTECT(Rf_allocVector(INTSXP, n_xlen));
+  SEXP beta = PROTECT(Rf_allocVector(REALSXP, n_xlen));
+  SEXP se_out = PROTECT(Rf_allocVector(REALSXP, n_xlen));
+  SEXP counts = PROTECT(Rf_allocVector(INTSXP, 10));
+  nprotect += 4;
+
+  size_t out_count = 0;
+  int status = genomicssem_sumstats_qc(
+      INTEGER(a1_ref),
+      INTEGER(a2_ref),
+      INTEGER(a1_file),
+      INTEGER(a2_file),
+      REAL(effect),
+      REAL(se),
+      REAL(p),
+      REAL(n_values),
+      REAL(maf_ref),
+      (size_t)n_xlen,
+      XLENGTH(maf_file) == 0 ? NULL : REAL(maf_file),
+      (size_t)XLENGTH(maf_file),
+      XLENGTH(info) == 0 ? NULL : REAL(info),
+      (size_t)XLENGTH(info),
+      scalar_real(info_filter_, "info.filter"),
+      scalar_logical(ols_, "OLS"),
+      scalar_logical(beta_is_character_, "beta_is_character"),
+      scalar_logical(linprob_, "linprob"),
+      scalar_logical(se_logit_, "se.logit"),
+      INTEGER(keep),
+      REAL(beta),
+      REAL(se_out),
+      (size_t)n_xlen,
+      INTEGER(counts),
+      10,
+      &out_count);
+
+  check_status(status, "genomicssem_sumstats_qc");
+
+  SEXP out_count_sexp = PROTECT(Rf_ScalarInteger((int)out_count));
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 5));
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 5));
+  nprotect += 3;
+  SET_VECTOR_ELT(out, 0, keep);
+  SET_VECTOR_ELT(out, 1, beta);
+  SET_VECTOR_ELT(out, 2, se_out);
+  SET_VECTOR_ELT(out, 3, counts);
+  SET_VECTOR_ELT(out, 4, out_count_sexp);
+  SET_STRING_ELT(names, 0, Rf_mkChar("keep"));
+  SET_STRING_ELT(names, 1, Rf_mkChar("beta"));
+  SET_STRING_ELT(names, 2, Rf_mkChar("se"));
+  SET_STRING_ELT(names, 3, Rf_mkChar("counts"));
+  SET_STRING_ELT(names, 4, Rf_mkChar("n"));
+  Rf_setAttrib(out, R_NamesSymbol, names);
+
   UNPROTECT(nprotect);
   return out;
 }

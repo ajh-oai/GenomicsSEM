@@ -97,20 +97,31 @@ bench_prep <- function() {
 
     old_read <- getOption("GenomicSEM.fast_table_read")
     old_join <- getOption("GenomicSEM.fast_snp_join")
-    on.exit(options(GenomicSEM.fast_table_read = old_read, GenomicSEM.fast_snp_join = old_join), add = TRUE)
+    old_munge_qc <- getOption("GenomicSEM.fast_munge_qc")
+    old_sumstats_qc <- getOption("GenomicSEM.fast_sumstats_qc")
+    on.exit(options(
+      GenomicSEM.fast_table_read = old_read,
+      GenomicSEM.fast_snp_join = old_join,
+      GenomicSEM.fast_munge_qc = old_munge_qc,
+      GenomicSEM.fast_sumstats_qc = old_sumstats_qc
+    ), add = TRUE)
 
     rows <- list()
 
     modes <- data.frame(
-      fast_table_read = c(FALSE, TRUE, FALSE, TRUE),
-      fast_snp_join = c(FALSE, FALSE, TRUE, TRUE)
+      fast_table_read = c(FALSE, TRUE, FALSE, TRUE, TRUE),
+      fast_snp_join = c(FALSE, FALSE, FALSE, FALSE, TRUE),
+      fast_prep_qc = c(FALSE, FALSE, TRUE, TRUE, TRUE)
     )
 
     for (mode_i in seq_len(nrow(modes))) {
       fast_read <- modes$fast_table_read[mode_i]
       fast_join <- modes$fast_snp_join[mode_i]
+      fast_prep_qc <- modes$fast_prep_qc[mode_i]
       options(GenomicSEM.fast_table_read = fast_read)
       options(GenomicSEM.fast_snp_join = fast_join)
+      options(GenomicSEM.fast_munge_qc = fast_prep_qc)
+      options(GenomicSEM.fast_sumstats_qc = fast_prep_qc)
 
       sumstats_result <- time_expr({
         capture.output({
@@ -128,6 +139,7 @@ bench_prep <- function() {
         workflow = "sumstats",
         fast_table_read = fast_read,
         fast_snp_join = fast_join,
+        fast_prep_qc = fast_prep_qc,
         fast_ldsc_read = NA,
         n_snp = n_snp,
         n_traits = n_traits,
@@ -161,6 +173,7 @@ bench_prep <- function() {
         workflow = "munge",
         fast_table_read = fast_read,
         fast_snp_join = fast_join,
+        fast_prep_qc = fast_prep_qc,
         fast_ldsc_read = NA,
         n_snp = n_snp,
         n_traits = n_traits,
@@ -203,6 +216,7 @@ bench_ldsc_blocks <- function() {
     workflow = c("ldsc_block_old_loop", "ldsc_block_fast"),
     fast_table_read = NA,
     fast_snp_join = NA,
+    fast_prep_qc = NA,
     fast_ldsc_read = NA,
     n_snp = n_snp,
     n_traits = NA_integer_,
@@ -260,6 +274,7 @@ bench_ldsc_read <- function() {
         workflow = "ldsc_read",
         fast_table_read = NA,
         fast_snp_join = NA,
+        fast_prep_qc = NA,
         fast_ldsc_read = fast,
         n_snp = n_snp,
         n_traits = 1L,
@@ -279,6 +294,7 @@ bench_ldsc_read <- function() {
         workflow = "s_ldsc_read",
         fast_table_read = NA,
         fast_snp_join = NA,
+        fast_prep_qc = NA,
         fast_ldsc_read = fast,
         n_snp = n_snp,
         n_traits = NA_integer_,

@@ -76,6 +76,51 @@
   .LOG(b, " rows present in the full ", filename, " summary statistics file.",file=log.file)
   file <- .snp_inner_join(ref, file, by = "SNP", mode = "inner_join")
   .LOG((b-nrow(file)), " rows were removed from the ", filename, " summary statistics file as the rsIDs for these SNPs were not present in the reference file.",file=log.file)
+
+  fast_qc <- .sumstats_qc_fast(file, info.filter, OLS, beta, linprob, se.logit)
+  if (!is.null(fast_qc)) {
+    counts <- fast_qc$counts
+    if (counts[1] > 0) .LOG(counts[1], "rows were removed from the ", filename, " summary statistics file due to missing values in the P-value column",file=log.file)
+    if (counts[2] > 0) .LOG(counts[2], "rows were removed from the ", filename, " summary statistics file due to missing values in the effect column",file=log.file)
+    if (counts[3] > 0) .LOG(counts[3], " rows were removed from the ", filename, " summary statistics file due to allele frequencies printed as exactly 1 or 0", file=log.file)
+    if (counts[10] > 0) {
+      .LOG("The effect column was determined to be coded as an odds ratio (OR) for the ", filename, " summary statistics file based on the median of the effect column being close to 1. Please ensure the interpretation of this column as an OR is correct.",file=log.file)
+    } else {
+      .LOG("The effect column was determined NOT to be coded as an odds ratio (OR) for the ", filename, " summary statistics file based on the median of the effect column being close to 0.",file=log.file)
+    }
+    if (counts[4] > 0) .LOG(counts[4], "rows were removed from the", filename, "summary statistics file due to effect values estimated at exactly 0 as this causes problems for matrix inversion necessary for later Genomic SEM analyses.",file=log.file)
+
+    if(OLS & is.character(beta)){
+      .LOG("User provided arguments indicate that a GWAS of a continuous trait with already standardized betas is being provided for: ", filename,file=log.file)
+    }
+    if(linprob){
+      .LOG("An transformation used to back out logistic betas for binary traits is being applied for: ", filename,file=log.file)
+    }
+    if(!linprob & !OLS & !se.logit){
+      .LOG("Performing transformation under the assumption that the effect column is either an odds ratio or logistic beta (please see output above to determine whether it was interpreted as an odds ratio) and the SE column is the SE of the odds ratio (i.e., NOT on the logistic scale) for:", filename,file=log.file)
+    }
+    if(se.logit){
+      .LOG("Performing transformation under the assumption that the effect column is either an odds ratio or logistic beta (please see output above to determine whether it was interpreted as an odds ratio) and the SE column is a logistic SE (i.e., NOT the SE of the odds ratio) for:", filename,file=log.file)
+    }
+
+    if (counts[5] > 0) .LOG(counts[5], " row(s) were removed from the" , filename, " summary statistics file due to the effect allele (A1) column not matching A1 or A2 in the reference file.",file=log.file)
+    if (counts[6] > 0) .LOG(counts[6], " row(s) were removed from the ", filename, " summary statistics file due to the other allele (A2) column not matching A1 or A2 in the reference file.",file=log.file)
+    if (counts[7] > 100) .LOG("In excess of 100 SNPs have P val above 1 or below 0. The P column may be mislabled!",file=log.file)
+    if("INFO" %in% colnames(file)) {
+      .LOG(counts[8], "rows were removed from the ", filename, " summary statistics file due to INFO values below the designated threshold of ", info.filter,file=log.file)
+    }else{.LOG("No INFO column, cannot filter on INFO, which may influence results",file=log.file)}
+
+    output <- cbind.data.frame(file$SNP[fast_qc$keep], fast_qc$beta, fast_qc$se)
+    colnames(output) <- c("SNP",name.beta,name.se)
+
+    .LOG(nrow(output), " SNPs are left in the summary statistics file ", filename, " after QC and merging with the reference file.",file=log.file)
+
+    if(mean(abs(output[,2]/output[,3])) > 5){
+      .LOG('WARNING: The average value of estimate over standard error (i.e., Z) is > 5 for ',trait.name, ". This suggests a column was misinterpreted or arguments were misspecified. Please post on the google group if you are unable to figure out the issue.",file=log.file, print=FALSE)
+      warning(paste0('The average value of estimate over standard error (i.e., Z) is > 5 for ',trait.name, ". This suggests a column was misinterpreted or arguments were misspecified. Please post on the google group if you are unable to figure out the issue."))
+    }
+    return(output)
+  }
   
   ##remove any rows with missing p-values
   P_numeric <- suppressWarnings(as.numeric(file$P))

@@ -493,6 +493,122 @@ return(S_Full)
   x
 }
 
+.allele_code <- function(x) {
+  match(as.character(x), c("A", "C", "G", "T"))
+}
+
+.munge_qc_fast <- function(file, info.filter, maf.filter) {
+  if (!.genomicssem_use_rust() || !isTRUE(getOption("GenomicSEM.fast_munge_qc", TRUE))) {
+    return(NULL)
+  }
+  required <- c("A1.x", "A2.x", "A1.y", "A2.y", "effect", "P")
+  if (!all(required %in% colnames(file))) {
+    return(NULL)
+  }
+
+  p <- suppressWarnings(as.numeric(file$P))
+  effect <- suppressWarnings(as.numeric(file$effect))
+  if (any(is.finite(p) & (p < 0 | p > 1))) {
+    return(NULL)
+  }
+
+  info <- if ("INFO" %in% colnames(file)) suppressWarnings(as.numeric(file$INFO)) else numeric(0)
+  maf <- if ("MAF" %in% colnames(file)) suppressWarnings(as.numeric(as.character(file$MAF))) else numeric(0)
+
+  out <- .Call(
+    "genomicssem_munge_qc_call",
+    as.integer(.allele_code(file$A1.x)),
+    as.integer(.allele_code(file$A2.x)),
+    as.integer(.allele_code(file$A1.y)),
+    as.integer(.allele_code(file$A2.y)),
+    as.numeric(effect),
+    as.numeric(p),
+    as.numeric(info),
+    as.numeric(maf),
+    as.numeric(info.filter),
+    as.numeric(maf.filter),
+    PACKAGE = "GenomicSEM"
+  )
+
+  n <- as.integer(out$n)
+  if (n == 0L) {
+    out$keep <- integer(0)
+    out$z <- numeric(0)
+  } else {
+    out$keep <- out$keep[seq_len(n)]
+    out$z <- out$z[seq_len(n)]
+  }
+  out
+}
+
+.sumstats_qc_fast <- function(file, info.filter, OLS, beta, linprob, se.logit) {
+  if (!.genomicssem_use_rust() || !isTRUE(getOption("GenomicSEM.fast_sumstats_qc", TRUE))) {
+    return(NULL)
+  }
+  required <- c("A1.x", "A2.x", "A1.y", "A2.y", "effect", "P")
+  if (!all(required %in% colnames(file))) {
+    return(NULL)
+  }
+  if (!("MAF.x" %in% colnames(file) || "MAF" %in% colnames(file))) {
+    return(NULL)
+  }
+  if (!("N" %in% colnames(file)) && (OLS || linprob)) {
+    return(NULL)
+  }
+  if (!("SE" %in% colnames(file)) && !(OLS && is.character(beta))) {
+    return(NULL)
+  }
+
+  p <- suppressWarnings(as.numeric(file$P))
+  if (any(is.finite(p) & (p < 0 | p > 1))) {
+    return(NULL)
+  }
+
+  n <- if ("N" %in% colnames(file)) suppressWarnings(as.numeric(file$N)) else rep(NA_real_, nrow(file))
+  se <- if ("SE" %in% colnames(file)) suppressWarnings(as.numeric(file$SE)) else rep(NA_real_, nrow(file))
+  maf_ref <- if ("MAF.x" %in% colnames(file)) {
+    suppressWarnings(as.numeric(file$MAF.x))
+  } else {
+    suppressWarnings(as.numeric(file$MAF))
+  }
+  maf_file <- if ("MAF.y" %in% colnames(file)) suppressWarnings(as.numeric(file$MAF.y)) else numeric(0)
+  info <- if ("INFO" %in% colnames(file)) suppressWarnings(as.numeric(file$INFO)) else numeric(0)
+
+  out <- .Call(
+    "genomicssem_sumstats_qc_call",
+    as.integer(.allele_code(file$A1.x)),
+    as.integer(.allele_code(file$A2.x)),
+    as.integer(.allele_code(file$A1.y)),
+    as.integer(.allele_code(file$A2.y)),
+    as.numeric(file$effect),
+    as.numeric(se),
+    as.numeric(p),
+    as.numeric(n),
+    as.numeric(maf_ref),
+    as.numeric(maf_file),
+    as.numeric(info),
+    as.numeric(info.filter),
+    as.logical(OLS),
+    as.logical(is.character(beta)),
+    as.logical(linprob),
+    as.logical(se.logit),
+    PACKAGE = "GenomicSEM"
+  )
+
+  out_n <- as.integer(out$n)
+  if (out_n == 0L) {
+    out$keep <- integer(0)
+    out$beta <- numeric(0)
+    out$se <- numeric(0)
+  } else {
+    rows <- seq_len(out_n)
+    out$keep <- out$keep[rows]
+    out$beta <- out$beta[rows]
+    out$se <- out$se[rows]
+  }
+  out
+}
+
 .get_V_full <- function(k, V_LD, varSNPSE2, V_SNP) {
   if (.genomicssem_use_rust()) {
     return(.Call(

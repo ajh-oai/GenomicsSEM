@@ -29,6 +29,8 @@ pub enum KernelError {
 pub type KernelResult<T> = Result<T, KernelError>;
 
 pub const COMMONFACTOR_BATCH_OUT_COLS: usize = 7;
+pub const MUNGE_QC_COUNT_LEN: usize = 8;
+pub const SUMSTATS_QC_COUNT_LEN: usize = 10;
 
 #[inline]
 fn idx(row: usize, col: usize, nrow: usize) -> usize {
@@ -38,6 +40,95 @@ fn idx(row: usize, col: usize, nrow: usize) -> usize {
 #[inline]
 fn ridx(row: usize, col: usize, ncol: usize) -> usize {
     row * ncol + col
+}
+
+fn median_finite(values: &mut Vec<f64>) -> f64 {
+    values.retain(|x| x.is_finite());
+    if values.is_empty() {
+        return f64::NAN;
+    }
+
+    values.sort_by(|a, b| a.total_cmp(b));
+    let mid = values.len() / 2;
+    if values.len() % 2 == 1 {
+        values[mid]
+    } else {
+        0.5 * (values[mid - 1] + values[mid])
+    }
+}
+
+fn normal_quantile(p: f64) -> f64 {
+    const A: [f64; 6] = [
+        -3.969683028665376e+01,
+        2.209460984245205e+02,
+        -2.759285104469687e+02,
+        1.383577518672690e+02,
+        -3.066479806614716e+01,
+        2.506628277459239e+00,
+    ];
+    const B: [f64; 5] = [
+        -5.447609879822406e+01,
+        1.615858368580409e+02,
+        -1.556989798598866e+02,
+        6.680131188771972e+01,
+        -1.328068155288572e+01,
+    ];
+    const C: [f64; 6] = [
+        -7.784894002430293e-03,
+        -3.223964580411365e-01,
+        -2.400758277161838e+00,
+        -2.549732539343734e+00,
+        4.374664141464968e+00,
+        2.938163982698783e+00,
+    ];
+    const D: [f64; 4] = [
+        7.784695709041462e-03,
+        3.224671290700398e-01,
+        2.445134137142996e+00,
+        3.754408661907416e+00,
+    ];
+    const P_LOW: f64 = 0.02425;
+    const P_HIGH: f64 = 1.0 - P_LOW;
+
+    if p <= 0.0 {
+        return f64::NEG_INFINITY;
+    }
+    if p >= 1.0 {
+        return f64::INFINITY;
+    }
+
+    if p < P_LOW {
+        let q = (-2.0 * p.ln()).sqrt();
+        return (((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+            / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0);
+    }
+
+    if p <= P_HIGH {
+        let q = p - 0.5;
+        let r = q * q;
+        return (((((A[0] * r + A[1]) * r + A[2]) * r + A[3]) * r + A[4]) * r + A[5])
+            * q
+            / (((((B[0] * r + B[1]) * r + B[2]) * r + B[3]) * r + B[4]) * r + 1.0);
+    }
+
+    let q = (-2.0 * (1.0 - p).ln()).sqrt();
+    -(((((C[0] * q + C[1]) * q + C[2]) * q + C[3]) * q + C[4]) * q + C[5])
+        / ((((D[0] * q + D[1]) * q + D[2]) * q + D[3]) * q + 1.0)
+}
+
+#[inline]
+fn p_to_z_abs(p: f64) -> f64 {
+    -normal_quantile(0.5 * p)
+}
+
+#[inline]
+fn valid_allele(x: i32) -> bool {
+    (1..=4).contains(&x)
+}
+
+#[inline]
+fn allele_flip(a1_ref: i32, a1_file: i32, a2_file: i32) -> bool {
+    a1_ref != a1_file && a1_ref == a2_file
 }
 
 fn solve_linear(a: &[f64], b: &[f64], n: usize) -> KernelResult<Vec<f64>> {
@@ -124,6 +215,292 @@ fn quadratic_form_inverse(a: &[f64], x: &[f64], n: usize) -> KernelResult<f64> {
         out += x[i] * sol[i];
     }
     Ok(out)
+}
+
+pub struct MungeQcOutput<'a> {
+    pub keep: &'a mut [i32],
+    pub z: &'a mut [f64],
+    pub counts: &'a mut [i32],
+}
+
+pub fn munge_qc(
+    a1_ref: &[i32],
+    a2_ref: &[i32],
+    a1_file: &[i32],
+    a2_file: &[i32],
+    effect: &[f64],
+    p: &[f64],
+    info: Option<&[f64]>,
+    maf: Option<&[f64]>,
+    info_filter: f64,
+    maf_filter: f64,
+    out: &mut MungeQcOutput<'_>,
+) -> KernelResult<usize> {
+    let n = effect.len();
+    if a1_ref.len() != n
+        || a2_ref.len() != n
+        || a1_file.len() != n
+        || a2_file.len() != n
+        || p.len() != n
+        || info.is_some_and(|x| x.len() != n)
+        || maf.is_some_and(|x| x.len() != n)
+        || out.keep.len() < n
+        || out.z.len() < n
+        || out.counts.len() < MUNGE_QC_COUNT_LEN
+    {
+        return Err(KernelError::BadDimensions);
+    }
+
+    out.counts[..MUNGE_QC_COUNT_LEN].fill(0);
+
+    let mut median_values = Vec::with_capacity(n);
+    for i in 0..n {
+        if !p[i].is_finite() {
+            continue;
+        }
+        if !effect[i].is_finite() {
+            continue;
+        }
+        median_values.push(effect[i]);
+    }
+    let or_detected = median_finite(&mut median_values).round() == 1.0;
+    out.counts[7] = i32::from(or_detected);
+
+    let mut out_n = 0usize;
+    for i in 0..n {
+        let p_i = p[i];
+        if !p_i.is_finite() {
+            out.counts[0] += 1;
+            continue;
+        }
+
+        let mut effect_i = effect[i];
+        if !effect_i.is_finite() {
+            out.counts[1] += 1;
+            continue;
+        }
+
+        if or_detected {
+            effect_i = effect_i.ln();
+        }
+
+        let a1r = a1_ref[i];
+        let a2r = a2_ref[i];
+        let a1f = a1_file[i];
+        let a2f = a2_file[i];
+        if !valid_allele(a1r) || !valid_allele(a2r) || !valid_allele(a1f) || !valid_allele(a2f) {
+            out.counts[2] += 1;
+            continue;
+        }
+
+        if allele_flip(a1r, a1f, a2f) {
+            effect_i = -effect_i;
+        }
+
+        if a1r != a1f && a1r != a2f {
+            out.counts[2] += 1;
+            continue;
+        }
+        if a2r != a2f && a2r != a1f {
+            out.counts[3] += 1;
+            continue;
+        }
+
+        if p_i > 1.0 || p_i < 0.0 {
+            out.counts[4] += 1;
+        }
+
+        if let Some(info) = info {
+            if !info[i].is_finite() || info[i] < info_filter {
+                out.counts[5] += 1;
+                continue;
+            }
+        }
+
+        if let Some(maf) = maf {
+            if !maf[i].is_finite() || maf[i] < maf_filter {
+                out.counts[6] += 1;
+                continue;
+            }
+        }
+
+        out.keep[out_n] = (i + 1) as i32;
+        out.z[out_n] = effect_i.signum() * p_to_z_abs(p_i);
+        out_n += 1;
+    }
+
+    Ok(out_n)
+}
+
+pub struct SumstatsQcOutput<'a> {
+    pub keep: &'a mut [i32],
+    pub beta: &'a mut [f64],
+    pub se_out: &'a mut [f64],
+    pub counts: &'a mut [i32],
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn sumstats_qc(
+    a1_ref: &[i32],
+    a2_ref: &[i32],
+    a1_file: &[i32],
+    a2_file: &[i32],
+    effect: &[f64],
+    se: &[f64],
+    p: &[f64],
+    n_values: &[f64],
+    maf_ref: &[f64],
+    maf_file: Option<&[f64]>,
+    info: Option<&[f64]>,
+    info_filter: f64,
+    ols: bool,
+    beta_is_character: bool,
+    linprob: bool,
+    se_logit: bool,
+    out: &mut SumstatsQcOutput<'_>,
+) -> KernelResult<usize> {
+    let n = effect.len();
+    if a1_ref.len() != n
+        || a2_ref.len() != n
+        || a1_file.len() != n
+        || a2_file.len() != n
+        || se.len() != n
+        || p.len() != n
+        || n_values.len() != n
+        || maf_ref.len() != n
+        || maf_file.is_some_and(|x| x.len() != n)
+        || info.is_some_and(|x| x.len() != n)
+        || out.keep.len() < n
+        || out.beta.len() < n
+        || out.se_out.len() < n
+        || out.counts.len() < SUMSTATS_QC_COUNT_LEN
+    {
+        return Err(KernelError::BadDimensions);
+    }
+
+    out.counts[..SUMSTATS_QC_COUNT_LEN].fill(0);
+
+    let mut median_values = Vec::with_capacity(n);
+    for i in 0..n {
+        if !p[i].is_finite() || !effect[i].is_finite() {
+            continue;
+        }
+        let maf = maf_file.map(|x| x[i]).unwrap_or(maf_ref[i]);
+        let maf = if maf > 0.5 { 1.0 - maf } else { maf };
+        if maf_file.is_some() && (maf == 0.0 || maf == 1.0 || !maf.is_finite()) {
+            continue;
+        }
+        median_values.push(effect[i]);
+    }
+    let or_detected = median_finite(&mut median_values).round() == 1.0;
+    out.counts[9] = i32::from(or_detected);
+
+    let mut out_n = 0usize;
+    for i in 0..n {
+        let p_i = p[i];
+        if !p_i.is_finite() {
+            out.counts[0] += 1;
+            continue;
+        }
+
+        let mut effect_i = effect[i];
+        if !effect_i.is_finite() {
+            out.counts[1] += 1;
+            continue;
+        }
+
+        let maf_raw = maf_file.map(|x| x[i]).unwrap_or(maf_ref[i]);
+        let maf = if maf_raw > 0.5 { 1.0 - maf_raw } else { maf_raw };
+        if maf_file.is_some() && (maf == 0.0 || maf == 1.0 || !maf.is_finite()) {
+            out.counts[2] += 1;
+            continue;
+        }
+        let var_snp = 2.0 * maf * (1.0 - maf);
+
+        if or_detected {
+            effect_i = effect_i.ln();
+        }
+
+        if effect_i == 0.0 || !effect_i.is_finite() {
+            out.counts[3] += 1;
+            continue;
+        }
+
+        let z = effect_i.signum() * p_to_z_abs(p_i);
+        let mut se_i = se[i];
+        if ols && !beta_is_character {
+            if !n_values[i].is_finite() || !var_snp.is_finite() || var_snp <= 0.0 {
+                continue;
+            }
+            effect_i = z / (n_values[i] * var_snp).sqrt();
+        }
+        if linprob {
+            if !n_values[i].is_finite() || !var_snp.is_finite() || var_snp <= 0.0 {
+                continue;
+            }
+            effect_i = z / ((n_values[i] / 4.0) * var_snp).sqrt();
+            se_i = 1.0 / ((n_values[i] / 4.0) * var_snp).sqrt();
+        }
+
+        let a1r = a1_ref[i];
+        let a2r = a2_ref[i];
+        let a1f = a1_file[i];
+        let a2f = a2_file[i];
+        if !valid_allele(a1r) || !valid_allele(a2r) || !valid_allele(a1f) || !valid_allele(a2f) {
+            out.counts[4] += 1;
+            continue;
+        }
+        if allele_flip(a1r, a1f, a2f) {
+            effect_i = -effect_i;
+        }
+        if a1r != a1f && a1r != a2f {
+            out.counts[4] += 1;
+            continue;
+        }
+        if a2r != a2f && a2r != a1f {
+            out.counts[5] += 1;
+            continue;
+        }
+
+        if p_i > 1.0 || p_i < 0.0 {
+            out.counts[6] += 1;
+        }
+
+        if let Some(info) = info {
+            if !info[i].is_finite() || info[i] < info_filter {
+                out.counts[7] += 1;
+                continue;
+            }
+        }
+
+        let (beta_out, se_out) = if ols {
+            (effect_i, (effect_i / z).abs())
+        } else if linprob {
+            let denom = ((effect_i * effect_i) * var_snp + std::f64::consts::PI.powi(2) / 3.0).sqrt();
+            (effect_i / denom, se_i / denom)
+        } else if se_logit {
+            let denom = ((effect_i * effect_i) * var_snp + std::f64::consts::PI.powi(2) / 3.0).sqrt();
+            (effect_i / denom, se_i / denom)
+        } else {
+            let denom = ((effect_i * effect_i) * var_snp + std::f64::consts::PI.powi(2) / 3.0).sqrt();
+            (effect_i / denom, (se_i / effect_i.exp()) / denom)
+        };
+
+        if !beta_out.is_finite() || !se_out.is_finite() {
+            continue;
+        }
+        if linprob && (beta_out == 0.0 || se_out == 0.0) {
+            out.counts[8] += 1;
+            continue;
+        }
+
+        out.keep[out_n] = (i + 1) as i32;
+        out.beta[out_n] = beta_out;
+        out.se_out[out_n] = se_out;
+        out_n += 1;
+    }
+
+    Ok(out_n)
 }
 
 fn vech_index(row: usize, col: usize, n: usize) -> usize {

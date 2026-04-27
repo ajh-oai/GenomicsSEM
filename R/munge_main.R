@@ -58,6 +58,43 @@ Please note that this is likely effective sample size cut in half. The function 
   .LOG(b, " rows present in the full ", filename, " summary statistics file.",file=log.file)
   file <- .snp_inner_join(ref, file, by = "SNP", mode = "merge", sort_by_snp = TRUE)
   .LOG((b-nrow(file)), " rows were removed from the ", filename, " summary statistics file as the rs-ids for these rows were not present in the reference file.",file=log.file)
+
+  fast_qc <- .munge_qc_fast(file, info.filter, maf.filter)
+  if (!is.null(fast_qc)) {
+    counts <- fast_qc$counts
+    if (counts[1] > 0) .LOG(counts[1], " rows were removed from the ", filename, " summary statistics file due to missing values in the P-value column",file=log.file)
+    if (counts[2] > 0) .LOG(counts[2], " rows were removed from the ", filename, " summary statistics file due to missing values in the effect column",file=log.file)
+    if (counts[8] > 0) .LOG("The effect column was determined to be coded as an odds ratio (OR) for the ", filename, " summary statistics file. Please ensure this is correct.",file=log.file)
+    if (counts[3] > 0) .LOG(counts[3], " row(s) were removed from the ", filename, " summary statistics file due to the effect allele (A1) column not matching A1 or A2 in the reference file.",file=log.file)
+    if (counts[4] > 0) .LOG(counts[4], " row(s) were removed from the ", filename, " summary statistics file due to the other allele (A2) column not matching A1 or A2 in the reference file.",file=log.file)
+    if (counts[5] > 100) .LOG("In excess of 100 SNPs have P val above 1 or below 0. The P column may be mislabled!",file=log.file)
+    if("INFO" %in% colnames(file)) {
+      .LOG(counts[6], " rows were removed from the ", filename, " summary statistics file due to INFO values below the designated threshold of", info.filter,file=log.file)
+    }else{.LOG("No INFO column, cannot filter on INFO, which may influence results",file=log.file)}
+    if("MAF" %in% colnames(file)) {
+      .LOG(counts[7], " rows were removed from the ", filename, " summary statistics file due to missing MAF information or MAFs below the designated threshold of", maf.filter,file=log.file)
+    }else{
+      .LOG("No MAF column, cannot filter on MAF, which may influence results",file=log.file)
+    }
+
+    keep <- fast_qc$keep
+    if("N" %in% colnames(file)) {
+      output <- cbind.data.frame(file$SNP[keep],file$N[keep],fast_qc$z,file$A1.x[keep],file$A2.x[keep])
+    }else{output <- cbind.data.frame(file$SNP[keep],N,fast_qc$z,file$A1.x[keep],file$A2.x[keep]) }
+
+    if(!("N" %in% names(file)) & (exists("N") == FALSE)) .LOG('Cannot find sample size column for',filename, " and a sample size was not provided for the N argument. Please either provide a total sample size to the N argument or try changing the name of the sample size column to N.",file=log.file)
+
+    colnames(output) <- c("SNP","N","Z","A1","A2")
+    .LOG(nrow(output), "SNPs are left in the summary statistics file ", filename, " after QC.",file=log.file)
+
+    trait.name<-str_replace_all(trait.name, fixed(" "), "")
+
+    write.table(x = output,file = paste0(trait.name,".sumstats"),sep="\t", quote = FALSE, row.names = F)
+    gzip(paste0(trait.name,".sumstats"), overwrite=overwrite)
+    .LOG("I am done munging file: ", filename,file=log.file)
+    .LOG("The file is saved as ", paste0(trait.name,".sumstats.gz"), " in the current working directory.",file=log.file)
+    return()
+  }
   
   ##remove any rows with missing p-values
   b<-nrow(file)

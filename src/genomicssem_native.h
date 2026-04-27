@@ -225,4 +225,53 @@ int genomicssem_fit_generic_sem_batch(
     double *out,
     size_t out_len);
 
+int genomicssem_munge_qc(
+    const int *a1_ref,
+    const int *a2_ref,
+    const int *a1_file,
+    const int *a2_file,
+    const double *effect,
+    const double *p,
+    size_t n,
+    const double *info,
+    size_t info_len,
+    const double *maf,
+    size_t maf_len,
+    double info_filter,
+    double maf_filter,
+    int *keep,
+    double *z,
+    size_t out_len,
+    int *counts,
+    size_t counts_len,
+    size_t *out_count);
+
+int genomicssem_sumstats_qc(
+    const int *a1_ref,
+    const int *a2_ref,
+    const int *a1_file,
+    const int *a2_file,
+    const double *effect,
+    const double *se,
+    const double *p,
+    const double *n_values,
+    const double *maf_ref,
+    size_t n,
+    const double *maf_file,
+    size_t maf_file_len,
+    const double *info,
+    size_t info_len,
+    double info_filter,
+    int ols,
+    int beta_is_character,
+    int linprob,
+    int se_logit,
+    int *keep,
+    double *beta,
+    double *se_out,
+    size_t out_len,
+    int *counts,
+    size_t counts_len,
+    size_t *out_count);
+
 #endif

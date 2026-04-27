@@ -806,3 +806,43 @@ Local result summary for the default fast reader path:
 | munge | 1.188 | 1.233 | unchanged/slightly noisy; gzip and table IO dominate |
 | ldsc_read | 0.113 | 0.109 | unrelated reader path noise |
 | s_ldsc_read | 0.084 | 0.076 | unrelated reader path noise |
+
+## 2026-04-27 15:58 PDT - Rust row-QC kernels for munge and sumstats
+
+Change set:
+
+- Added native Rust row-QC kernels for supported `munge()` and `sumstats()` post-merge prep work.
+- `munge()` now tries Rust for missing-value filtering, OR detection, allele flipping/matching, INFO/MAF filtering, and Z-score generation.
+- `sumstats()` now tries Rust for missing-value filtering, MAF/varSNP handling, OR detection, allele flipping/matching, INFO filtering, Z-score generation, and the final beta/SE transforms for OLS, linear-probability, and logistic modes.
+- Added `.Call` wrappers and options `GenomicSEM.fast_munge_qc` / `GenomicSEM.fast_sumstats_qc`, both enabled by default when the native library is available.
+- Prep parity tests now compare legacy R QC against the Rust QC path. Z values are checked with tolerance because the Rust path uses an independent inverse-normal approximation for `sqrt(qchisq(P, 1, lower.tail = FALSE))`.
+
+Validation:
+
+```sh
+cargo test --workspace
+R CMD INSTALL --install-tests .
+Rscript tests/prep-fast-path.R
+Rscript benches/bench_prep_fast_paths.R 100000 2 1 200 1
+```
+
+Local benchmark summary:
+
+| workflow | fast_table_read | fast_prep_qc | fast_snp_join | elapsed_sec | checksum |
+|---|---|---|---|---:|---:|
+| sumstats | FALSE | FALSE | FALSE | 1.376 | 31028.76 |
+| munge | FALSE | FALSE | FALSE | 1.838 | 2000699000 |
+| sumstats | TRUE | FALSE | FALSE | 0.591 | 31028.76 |
+| munge | TRUE | FALSE | FALSE | 1.263 | 2000699000 |
+| sumstats | FALSE | TRUE | FALSE | 0.923 | 31028.76 |
+| munge | FALSE | TRUE | FALSE | 1.620 | 2000699000 |
+| sumstats | TRUE | TRUE | FALSE | 0.185 | 31028.76 |
+| munge | TRUE | TRUE | FALSE | 0.987 | 2000699000 |
+| sumstats | TRUE | TRUE | TRUE | 0.240 | 31028.76 |
+| munge | TRUE | TRUE | TRUE | 0.923 | 2000699000 |
+
+Interpretation:
+
+- The combined fread + Rust QC path improves the 100k-SNP/2-trait synthetic `sumstats()` run `1.376s -> 0.185s`, about `7.4x`.
+- The same combined path improves `munge()` `1.838s -> 0.987s`, about `1.9x`; output gzip/write time is now a larger share of the remaining runtime.
+- The experimental SNP join is still mixed: it helps `munge()` in this run but hurts `sumstats()`, so it remains disabled by default.

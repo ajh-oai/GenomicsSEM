@@ -3,7 +3,7 @@
 use genomicssem_core::{
     fill_s_full, fill_v_full, fill_v_snp, fill_v_snp_batch, fill_z_pre, fit_commonfactor_batch,
     fit_commonfactor_main, fit_commonfactor_q, fit_generic_sem, fit_generic_sem_batch,
-    GenomicControl, KernelError,
+    munge_qc, sumstats_qc, GenomicControl, KernelError, MungeQcOutput, SumstatsQcOutput,
 };
 use std::slice;
 
@@ -592,6 +592,160 @@ pub unsafe extern "C" fn genomicssem_fit_generic_sem_batch(
             n_threads,
             out,
         )
+    })();
+
+    result.map(|()| OK).unwrap_or_else(code)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn genomicssem_munge_qc(
+    a1_ref: *const i32,
+    a2_ref: *const i32,
+    a1_file: *const i32,
+    a2_file: *const i32,
+    effect: *const f64,
+    p: *const f64,
+    n: usize,
+    info: *const f64,
+    info_len: usize,
+    maf: *const f64,
+    maf_len: usize,
+    info_filter: f64,
+    maf_filter: f64,
+    keep: *mut i32,
+    z: *mut f64,
+    out_len: usize,
+    counts: *mut i32,
+    counts_len: usize,
+    out_count: *mut usize,
+) -> i32 {
+    let result = (|| {
+        let a1_ref = checked_slice(a1_ref, n)?;
+        let a2_ref = checked_slice(a2_ref, n)?;
+        let a1_file = checked_slice(a1_file, n)?;
+        let a2_file = checked_slice(a2_file, n)?;
+        let effect = checked_slice(effect, n)?;
+        let p = checked_slice(p, n)?;
+        let info = if info_len == 0 {
+            None
+        } else {
+            Some(checked_slice(info, info_len)?)
+        };
+        let maf = if maf_len == 0 {
+            None
+        } else {
+            Some(checked_slice(maf, maf_len)?)
+        };
+        let keep = checked_slice_mut(keep, out_len)?;
+        let z = checked_slice_mut(z, out_len)?;
+        let counts = checked_slice_mut(counts, counts_len)?;
+        if out_count.is_null() {
+            return Err(KernelError::NullPointer);
+        }
+
+        let mut out = MungeQcOutput { keep, z, counts };
+        *out_count = munge_qc(
+            a1_ref,
+            a2_ref,
+            a1_file,
+            a2_file,
+            effect,
+            p,
+            info,
+            maf,
+            info_filter,
+            maf_filter,
+            &mut out,
+        )?;
+        Ok(())
+    })();
+
+    result.map(|()| OK).unwrap_or_else(code)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn genomicssem_sumstats_qc(
+    a1_ref: *const i32,
+    a2_ref: *const i32,
+    a1_file: *const i32,
+    a2_file: *const i32,
+    effect: *const f64,
+    se: *const f64,
+    p: *const f64,
+    n_values: *const f64,
+    maf_ref: *const f64,
+    n: usize,
+    maf_file: *const f64,
+    maf_file_len: usize,
+    info: *const f64,
+    info_len: usize,
+    info_filter: f64,
+    ols: i32,
+    beta_is_character: i32,
+    linprob: i32,
+    se_logit: i32,
+    keep: *mut i32,
+    beta: *mut f64,
+    se_out: *mut f64,
+    out_len: usize,
+    counts: *mut i32,
+    counts_len: usize,
+    out_count: *mut usize,
+) -> i32 {
+    let result = (|| {
+        let a1_ref = checked_slice(a1_ref, n)?;
+        let a2_ref = checked_slice(a2_ref, n)?;
+        let a1_file = checked_slice(a1_file, n)?;
+        let a2_file = checked_slice(a2_file, n)?;
+        let effect = checked_slice(effect, n)?;
+        let se = checked_slice(se, n)?;
+        let p = checked_slice(p, n)?;
+        let n_values = checked_slice(n_values, n)?;
+        let maf_ref = checked_slice(maf_ref, n)?;
+        let maf_file = if maf_file_len == 0 {
+            None
+        } else {
+            Some(checked_slice(maf_file, maf_file_len)?)
+        };
+        let info = if info_len == 0 {
+            None
+        } else {
+            Some(checked_slice(info, info_len)?)
+        };
+        let keep = checked_slice_mut(keep, out_len)?;
+        let beta = checked_slice_mut(beta, out_len)?;
+        let se_out = checked_slice_mut(se_out, out_len)?;
+        let counts = checked_slice_mut(counts, counts_len)?;
+        if out_count.is_null() {
+            return Err(KernelError::NullPointer);
+        }
+
+        let mut out = SumstatsQcOutput {
+            keep,
+            beta,
+            se_out,
+            counts,
+        };
+        *out_count = sumstats_qc(
+            a1_ref,
+            a2_ref,
+            a1_file,
+            a2_file,
+            effect,
+            se,
+            p,
+            n_values,
+            maf_ref,
+            maf_file,
+            info,
+            info_filter,
+            ols != 0,
+            beta_is_character != 0,
+            linprob != 0,
+            se_logit != 0,
+            &mut out,
+        )?;
+        Ok(())
     })();
 
     result.map(|()| OK).unwrap_or_else(code)
