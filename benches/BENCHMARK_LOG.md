@@ -884,3 +884,61 @@ Interpretation:
 - For the one-annotation synthetic case, the block setup is too small to measure reliably, but the native path does not move the total `ldsc()`/`s_ldsc()` reader benchmark.
 - For a wider annotation matrix, the single-thread native loop is not better than BLAS-backed R, but the 4-thread Rust path is about `2x` faster than the direct R helper and about `3.6x` faster than the explicit old loop.
 - This is a targeted `ldsc()`/`s_ldsc()` setup optimization, not a full Rust rewrite of the LDSC regression/jackknife solve.
+
+## 2026-04-27 16:33 PDT - Remote 16-CPU panda benchmark
+
+Environment:
+
+- Brix workload `ajh/genomicssem-bench` on panda, flex quota, 16 CPU, commit `6c18cb64119c1d0cfe930f36bbc72aa910b297fd`.
+- Ubuntu 24.04 pod image did not include R. Installed `r-base`, `r-base-dev`, system build libraries, and Ubuntu-packaged R dependencies with `apt-get`.
+- The pod could not reach CRAN (`SSL connect error` / timeout), and Ubuntu did not package `mgsub` or `splitstackshape`; installed local no-op stubs for those two namespace-only imports to allow this isolated benchmark install. These packages are not used by the benchmarked paths.
+- Set `OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1` before benchmarks so Rust thread scaling was not confounded with BLAS threading.
+
+Validation:
+
+```sh
+R CMD INSTALL --install-tests .
+Rscript tests/prep-fast-path.R
+Rscript benches/bench_prep_fast_paths.R 200000 2 20 200 2
+```
+
+Remote prep benchmark summary:
+
+| workflow | fast_table_read | fast_prep_qc | fast_snp_join | fast_ldsc_read | n_snp | n_annot_arg | elapsed_sec | checksum |
+|---|---|---|---|---|---:|---:|---:|---:|
+| sumstats | FALSE | FALSE | FALSE | NA | 200000 | NA | 5.559 | 62016.81 |
+| munge | FALSE | FALSE | FALSE | NA | 200000 | NA | 7.416 | 4000433000 |
+| sumstats | TRUE | FALSE | FALSE | NA | 200000 | NA | 2.856 | 62016.81 |
+| munge | TRUE | FALSE | FALSE | NA | 200000 | NA | 4.513 | 4000433000 |
+| sumstats | FALSE | TRUE | FALSE | NA | 200000 | NA | 3.518 | 62016.81 |
+| munge | FALSE | TRUE | FALSE | NA | 200000 | NA | 5.823 | 4000433000 |
+| sumstats | TRUE | TRUE | FALSE | NA | 200000 | NA | 1.210 | 62016.81 |
+| munge | TRUE | TRUE | FALSE | NA | 200000 | NA | 3.498 | 4000433000 |
+| sumstats | TRUE | TRUE | TRUE | NA | 200000 | NA | 1.212 | 62016.81 |
+| munge | TRUE | TRUE | TRUE | NA | 200000 | NA | 3.348 | 4000433000 |
+| ldsc_block_old_loop | NA | NA | NA | NA | 200000 | 20 | 0.065 | 4203209 |
+| ldsc_block_r_helper | NA | NA | NA | NA | 200000 | 20 | 0.057 | 4203209 |
+| ldsc_block_rust_1t | NA | NA | NA | NA | 200000 | 20 | 0.047 | 4203209 |
+| ldsc_block_rust_4t | NA | NA | NA | NA | 200000 | 20 | 0.013 | 4203209 |
+| ldsc_read | NA | NA | NA | FALSE | 200000 | 1 | 0.647 | 22003060000 |
+| s_ldsc_read | NA | NA | NA | FALSE | 200000 | 1 | 0.410 | 20002960000 |
+| ldsc_read | NA | NA | NA | TRUE | 200000 | 1 | 0.315 | 22003060000 |
+| s_ldsc_read | NA | NA | NA | TRUE | 200000 | 1 | 0.197 | 20002960000 |
+
+Remote LDSC block thread scaling:
+
+| workflow | threads | n_snp | n_annot_arg | n_blocks | elapsed_sec | checksum |
+|---|---:|---:|---:|---:|---:|---:|
+| ldsc_block_old_loop | NA | 1000000 | 50 | 200 | 2.009 | 51160935 |
+| ldsc_block_r_helper | NA | 1000000 | 50 | 200 | 1.539 | 51160935 |
+| ldsc_block_rust_r_binding | 1 | 1000000 | 50 | 200 | 1.283 | 51160935 |
+| ldsc_block_rust_r_binding | 2 | 1000000 | 50 | 200 | 0.645 | 51160935 |
+| ldsc_block_rust_r_binding | 4 | 1000000 | 50 | 200 | 0.323 | 51160935 |
+| ldsc_block_rust_r_binding | 8 | 1000000 | 50 | 200 | 0.163 | 51160935 |
+| ldsc_block_rust_r_binding | 16 | 1000000 | 50 | 200 | 0.108 | 51160935 |
+
+Interpretation:
+
+- On the remote 16-CPU pod, combined fast read + Rust QC improves `sumstats()` `5.559s -> 1.210s` (`4.6x`) and `munge()` `7.416s -> 3.498s` (`2.1x`) for the 200k-SNP/2-trait synthetic prep benchmark.
+- The `fread()` LDSC reader path improves `ldsc_read` `0.647s -> 0.315s` (`2.1x`) and `s_ldsc_read` `0.410s -> 0.197s` (`2.1x`).
+- The native LDSC block path scales cleanly through 16 Rust worker threads on the wider block benchmark: R helper `1.539s`, Rust R binding `0.108s` at 16 threads (`14.3x` faster than the direct R helper, `18.6x` faster than the explicit old loop).
