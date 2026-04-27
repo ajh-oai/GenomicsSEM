@@ -13,6 +13,9 @@ if (requireNamespace("GenomicSEM", quietly = TRUE)) {
 
 genomicssem_ns <- asNamespace("GenomicSEM")
 .ldsc_block_products <- get(".ldsc_block_products", envir = genomicssem_ns)
+.ldsc_read_table <- get(".ldsc_read_table", envir = genomicssem_ns)
+.ldsc_read_chromosome_tables <- get(".ldsc_read_chromosome_tables", envir = genomicssem_ns)
+.ldsc_read_m_files <- get(".ldsc_read_m_files", envir = genomicssem_ns)
 
 with_temp_cwd <- function(code) {
   old <- getwd()
@@ -123,6 +126,7 @@ bench_prep <- function() {
         workflow = "sumstats",
         fast_table_read = fast_read,
         fast_snp_join = fast_join,
+        fast_ldsc_read = NA,
         n_snp = n_snp,
         n_traits = n_traits,
         n_annot = NA_integer_,
@@ -155,6 +159,7 @@ bench_prep <- function() {
         workflow = "munge",
         fast_table_read = fast_read,
         fast_snp_join = fast_join,
+        fast_ldsc_read = NA,
         n_snp = n_snp,
         n_traits = n_traits,
         n_annot = NA_integer_,
@@ -196,6 +201,7 @@ bench_ldsc_blocks <- function() {
     workflow = c("ldsc_block_old_loop", "ldsc_block_fast"),
     fast_table_read = NA,
     fast_snp_join = NA,
+    fast_ldsc_read = NA,
     n_snp = n_snp,
     n_traits = NA_integer_,
     n_annot = n_annot,
@@ -206,5 +212,65 @@ bench_ldsc_blocks <- function() {
   )
 }
 
-results <- rbind(bench_prep(), bench_ldsc_blocks())
+bench_ldsc_read <- function() {
+  with_temp_cwd({
+    set.seed(seed + 2000L)
+    n_chrom <- 4L
+    n_per_chrom <- ceiling(n_snp / n_chrom)
+    for (chr in seq_len(n_chrom)) {
+      n <- if (chr < n_chrom) n_per_chrom else n_snp - n_per_chrom * (n_chrom - 1L)
+      snp_offset <- (chr - 1L) * n_per_chrom
+      ld <- data.frame(
+        CHR = chr,
+        SNP = paste0("rs", snp_offset + seq_len(n)),
+        BP = snp_offset + seq_len(n),
+        CM = 0,
+        MAF = runif(n, 0.05, 0.5),
+        L2 = runif(n, 1, 20),
+        stringsAsFactors = FALSE
+      )
+      write.table(ld, gzfile(paste0(chr, ".l2.ldscore.gz")), row.names = FALSE, quote = FALSE, sep = "\t")
+      write.table(data.frame(V1 = n), paste0(chr, ".l2.M_5_50"), row.names = FALSE, col.names = FALSE, quote = FALSE)
+    }
+
+    trait <- data.frame(
+      SNP = paste0("rs", seq_len(n_snp)),
+      N = sample(8000:12000, n_snp, replace = TRUE),
+      Z = rnorm(n_snp),
+      A1 = sample(c("A", "C", "G", "T"), n_snp, replace = TRUE),
+      stringsAsFactors = FALSE
+    )
+    write.table(trait, gzfile("trait.sumstats.gz"), row.names = FALSE, quote = FALSE, sep = "\t")
+
+    old <- getOption("GenomicSEM.fast_ldsc_read")
+    on.exit(options(GenomicSEM.fast_ldsc_read = old), add = TRUE)
+
+    rows <- list()
+    for (fast in c(FALSE, TRUE)) {
+      options(GenomicSEM.fast_ldsc_read = fast)
+      timed <- time_expr({
+        ld <- .ldsc_read_chromosome_tables(".", ".l2.ldscore.gz", seq_len(n_chrom))
+        m <- .ldsc_read_m_files(".", seq_len(n_chrom))
+        trait <- .ldsc_read_table("trait.sumstats.gz")
+        list(ld = ld, m = m, trait = trait)
+      })
+      rows[[length(rows) + 1L]] <- data.frame(
+        workflow = "ldsc_read",
+        fast_table_read = NA,
+        fast_snp_join = NA,
+        fast_ldsc_read = fast,
+        n_snp = n_snp,
+        n_traits = 1L,
+        n_annot = 1L,
+        n_blocks = NA_integer_,
+        elapsed_sec = timed$elapsed,
+        checksum = checksum_df(timed$value$ld) + checksum_df(timed$value$m) + checksum_df(timed$value$trait),
+        stringsAsFactors = FALSE
+      )
+    }
+    do.call(rbind, rows)
+  })
+}
+
+results <- rbind(bench_prep(), bench_ldsc_blocks(), bench_ldsc_read())
 print(results, row.names = FALSE)

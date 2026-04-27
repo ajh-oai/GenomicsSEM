@@ -327,6 +327,69 @@ return(S_Full)
   out
 }
 
+.ldsc_selected_chromosomes <- function(chr, select) {
+  if (isFALSE(select)) {
+    return(seq_len(chr))
+  }
+  if (identical(select, "ODD")) {
+    return(seq(1, chr, 2))
+  }
+  if (identical(select, "EVEN")) {
+    return(seq(2, chr, 2))
+  }
+  if (is.numeric(select)) {
+    return(select)
+  }
+  stop("select must be one of the following values: FALSE, 'ODD', 'EVEN', or a numeric vector of chromosome numbers.")
+}
+
+.ldsc_read_table <- function(path) {
+  if (!isTRUE(getOption("GenomicSEM.fast_ldsc_read", TRUE))) {
+    return(suppressMessages(read_delim(
+      path,
+      delim = "\t",
+      escape_double = FALSE,
+      trim_ws = TRUE,
+      progress = FALSE
+    )))
+  }
+
+  fread(
+    path,
+    header = TRUE,
+    data.table = FALSE,
+    check.names = FALSE,
+    showProgress = FALSE
+  )
+}
+
+.ldsc_read_m <- function(path) {
+  if (!isTRUE(getOption("GenomicSEM.fast_ldsc_read", TRUE))) {
+    return(suppressMessages(read_csv(path, col_names = FALSE)))
+  }
+
+  fread(
+    path,
+    header = FALSE,
+    data.table = FALSE,
+    showProgress = FALSE
+  )
+}
+
+.ldsc_read_chromosome_tables <- function(root, suffix, chromosomes) {
+  tables <- lapply(chromosomes, function(i) {
+    .ldsc_read_table(file.path(root, paste0(i, suffix)))
+  })
+  as.data.frame(rbindlist(tables, use.names = TRUE, fill = TRUE))
+}
+
+.ldsc_read_m_files <- function(root, chromosomes) {
+  tables <- lapply(chromosomes, function(i) {
+    .ldsc_read_m(file.path(root, paste0(i, ".l2.M_5_50")))
+  })
+  as.data.frame(rbindlist(tables, use.names = TRUE, fill = TRUE))
+}
+
 .ldsc_block_products <- function(weighted.LD, weighted.chi, n.blocks) {
   weighted.LD <- as.matrix(weighted.LD)
   weighted.chi <- as.numeric(weighted.chi)

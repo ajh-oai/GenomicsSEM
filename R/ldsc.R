@@ -21,11 +21,6 @@ ldsc <- function(traits, sample.prev, population.prev, ld, wld,
   
   .LOG("Multivariate ld-score regression of ", length(traits), " traits ", "(", paste(traits, collapse = " "), ")", " began at: ", begin.time, file=log.file)
   
-  if(identical(select, "ODD") || identical(select, "EVEN")){
-    odd<-seq(1,chr,2)
-    even<-seq(2,chr,2)
-  }
-  
   # Dimensions
   n.traits <- length(traits)
   n.V <- n.traits * (n.traits + 1) / 2
@@ -63,37 +58,8 @@ ldsc <- function(traits, sample.prev, population.prev, ld, wld,
   #########  READ LD SCORES:
   .LOG("Reading in LD scores", file=log.file)
 
-  if(isFALSE(select)){
-  x <- do.call("rbind", lapply(1:chr, function(i) {
-    suppressMessages(read_delim(
-      file.path(ld, paste0(i, ".l2.ldscore.gz")),
-      delim = "\t", escape_double = FALSE, trim_ws = TRUE, progress = FALSE))
-  }))
-  }
-
-  if(identical(select,"ODD")){
-    x <- do.call("rbind", lapply(odd, function(i) {
-      suppressMessages(read_delim(
-        file.path(ld, paste0(i, ".l2.ldscore.gz")),
-        delim = "\t", escape_double = FALSE, trim_ws = TRUE, progress = FALSE))
-    }))
-  }
-
-  if(identical(select,"EVEN")){
-    x <- do.call("rbind", lapply(even, function(i) {
-      suppressMessages(read_delim(
-        file.path(ld, paste0(i, ".l2.ldscore.gz")),
-        delim = "\t", escape_double = FALSE, trim_ws = TRUE, progress = FALSE))
-    }))
-  }
-
-  if(is.numeric(select)){
-    x <- do.call("rbind", lapply(select, function(i) {
-      suppressMessages(read_delim(
-        file.path(ld, paste0(i, ".l2.ldscore.gz")),
-        delim = "\t", escape_double = FALSE, trim_ws = TRUE, progress = FALSE))
-    }))
-  }
+  selected.chr <- .ldsc_selected_chromosomes(chr, select)
+  x <- .ldsc_read_chromosome_tables(ld, ".l2.ldscore.gz", selected.chr)
 
 
   x$CM <- NULL
@@ -102,34 +68,7 @@ ldsc <- function(traits, sample.prev, population.prev, ld, wld,
 
   ######### READ weights:
   if(sep_weights){
-    if(isFALSE(select)){
-    w <- do.call("rbind", lapply(1:chr, function(i) {
-      suppressMessages(read_delim(
-        file.path(wld, paste0(i, ".l2.ldscore.gz")),
-        delim = "\t", escape_double = FALSE, trim_ws = TRUE, progress = FALSE))
-    }))
-    }
-    if(identical(select, "EVEN")){
-      w <- do.call("rbind", lapply(even, function(i) {
-        suppressMessages(read_delim(
-          file.path(wld, paste0(i, ".l2.ldscore.gz")),
-          delim = "\t", escape_double = FALSE, trim_ws = TRUE, progress = FALSE))
-      }))
-    }
-    if(identical(select, "ODD")){
-      w <- do.call("rbind", lapply(odd, function(i) {
-        suppressMessages(read_delim(
-          file.path(wld, paste0(i, ".l2.ldscore.gz")),
-          delim = "\t", escape_double = FALSE, trim_ws = TRUE, progress = FALSE))
-      }))
-    }
-      if(is.numeric(select)){
-        w <- do.call("rbind", lapply(select, function(i) {
-          suppressMessages(read_delim(
-            file.path(wld, paste0(i, ".l2.ldscore.gz")),
-            delim = "\t", escape_double = FALSE, trim_ws = TRUE, progress = FALSE))
-        }))
-    }
+    w <- .ldsc_read_chromosome_tables(wld, ".l2.ldscore.gz", selected.chr)
   }else{w<-x}
 
   w$CM <- NULL
@@ -139,29 +78,7 @@ ldsc <- function(traits, sample.prev, population.prev, ld, wld,
 
   ### READ M
 
-  if(isFALSE(select)){
-  m <- do.call("rbind", lapply(1:chr, function(i) {
-    suppressMessages(read_csv(file.path(ld, paste0(i, ".l2.M_5_50")), col_names = FALSE))
-  }))
-  }
-
-  if(identical(select, "EVEN")){
-    m <- do.call("rbind", lapply(even, function(i) {
-      suppressMessages(read_csv(file.path(ld, paste0(i, ".l2.M_5_50")), col_names = FALSE))
-    }))
-  }
-
-  if(identical(select, "ODD")){
-    m <- do.call("rbind", lapply(odd, function(i) {
-      suppressMessages(read_csv(file.path(ld, paste0(i, ".l2.M_5_50")), col_names = FALSE))
-    }))
-  }
-
-  if(is.numeric(select)){
-    m <- do.call("rbind", lapply(select, function(i) {
-      suppressMessages(read_csv(file.path(ld, paste0(i, ".l2.M_5_50")), col_names = FALSE))
-    }))
-  }
+  m <- .ldsc_read_m_files(ld, selected.chr)
 
   M.tot <- sum(m)
   m <- M.tot
@@ -172,8 +89,7 @@ ldsc <- function(traits, sample.prev, population.prev, ld, wld,
   all_y <- lapply(traits, function(chi1) {
 
     ## READ chi2
-    y1 <- suppressMessages(na.omit(read_delim(
-      chi1, delim = "\t", escape_double = FALSE, trim_ws = TRUE, progress = FALSE)))
+    y1 <- suppressMessages(na.omit(.ldsc_read_table(chi1)))
 
     .LOG("Read in summary statistics [", s <<- s + 1, "/", n.traits, "] from: ", chi1, file=log.file)
 

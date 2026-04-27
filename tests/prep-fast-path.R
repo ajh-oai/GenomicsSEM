@@ -3,6 +3,8 @@ library(GenomicSEM)
 genomicssem_ns <- asNamespace("GenomicSEM")
 .ldsc_block_products <- get(".ldsc_block_products", envir = genomicssem_ns)
 .read_sumstats_table <- get(".read_sumstats_table", envir = genomicssem_ns)
+.ldsc_read_chromosome_tables <- get(".ldsc_read_chromosome_tables", envir = genomicssem_ns)
+.ldsc_read_m_files <- get(".ldsc_read_m_files", envir = genomicssem_ns)
 
 with_temp_cwd <- function(code) {
   old <- getwd()
@@ -154,9 +156,105 @@ check_munge_fast_reader <- function() {
   })
 }
 
+check_ldsc_fast_reader <- function() {
+  with_temp_cwd({
+    for (chr in 1:2) {
+      ld <- data.frame(
+        CHR = chr,
+        SNP = paste0("rs", chr, "_", 1:3),
+        BP = chr * 1000 + 1:3,
+        CM = 0,
+        MAF = c(0.1, 0.2, 0.3),
+        L2 = c(1.2, 1.3, 1.4),
+        stringsAsFactors = FALSE
+      )
+      write.table(ld, gzfile(paste0(chr, ".l2.ldscore.gz")), row.names = FALSE, quote = FALSE, sep = "\t")
+      write.table(data.frame(V1 = chr + 10), paste0(chr, ".l2.M_5_50"), row.names = FALSE, col.names = FALSE, quote = FALSE)
+    }
+
+    old <- getOption("GenomicSEM.fast_ldsc_read")
+    on.exit(options(GenomicSEM.fast_ldsc_read = old), add = TRUE)
+
+    options(GenomicSEM.fast_ldsc_read = FALSE)
+    fallback_ld <- .ldsc_read_chromosome_tables(".", ".l2.ldscore.gz", 1:2)
+    fallback_m <- .ldsc_read_m_files(".", 1:2)
+
+    options(GenomicSEM.fast_ldsc_read = TRUE)
+    fast_ld <- .ldsc_read_chromosome_tables(".", ".l2.ldscore.gz", 1:2)
+    fast_m <- .ldsc_read_m_files(".", 1:2)
+
+    stopifnot(isTRUE(all.equal(as.data.frame(fallback_ld), as.data.frame(fast_ld), check.attributes = FALSE)))
+    stopifnot(identical(as.numeric(as.matrix(fallback_m)), as.numeric(as.matrix(fast_m))))
+  })
+}
+
+check_ldsc_full_fast_reader <- function() {
+  with_temp_cwd({
+    set.seed(5)
+    for (chr in 1:2) {
+      n <- 300
+      idx <- (chr - 1L) * n + seq_len(n)
+      ld <- data.frame(
+        CHR = chr,
+        SNP = paste0("rs", idx),
+        BP = idx,
+        CM = 0,
+        MAF = runif(n, 0.05, 0.49),
+        L2 = runif(n, 1, 30),
+        stringsAsFactors = FALSE
+      )
+      write.table(ld, gzfile(paste0(chr, ".l2.ldscore.gz")), row.names = FALSE, quote = FALSE, sep = "\t")
+      write.table(data.frame(V1 = n), paste0(chr, ".l2.M_5_50"), row.names = FALSE, col.names = FALSE, quote = FALSE)
+    }
+
+    traits <- paste0("trait", 1:2, ".sumstats.gz")
+    for (trait_i in 1:2) {
+      sumstats <- data.frame(
+        SNP = paste0("rs", 1:600),
+        N = sample(9000:12000, 600, TRUE),
+        Z = rnorm(600),
+        A1 = sample(c("A", "C", "G", "T"), 600, TRUE),
+        stringsAsFactors = FALSE
+      )
+      write.table(sumstats, gzfile(traits[trait_i]), row.names = FALSE, quote = FALSE, sep = "\t")
+    }
+
+    old <- getOption("GenomicSEM.fast_ldsc_read")
+    on.exit(options(GenomicSEM.fast_ldsc_read = old), add = TRUE)
+
+    run_ldsc <- function(fast) {
+      options(GenomicSEM.fast_ldsc_read = fast)
+      capture.output({
+        out <- suppressWarnings(ldsc(
+          traits = traits,
+          sample.prev = c(NA, NA),
+          population.prev = c(NA, NA),
+          ld = ".",
+          wld = ".",
+          trait.names = c("t1", "t2"),
+          sep_weights = FALSE,
+          chr = 2,
+          n.blocks = 10,
+          ldsc.log = paste0("ldsc_", fast)
+        ))
+      })
+      out
+    }
+
+    fallback <- run_ldsc(FALSE)
+    fast <- run_ldsc(TRUE)
+
+    stopifnot(isTRUE(all.equal(fallback$S, fast$S, tolerance = 1e-10, check.attributes = FALSE)))
+    stopifnot(isTRUE(all.equal(fallback$V, fast$V, tolerance = 1e-10, check.attributes = FALSE)))
+    stopifnot(isTRUE(all.equal(fallback$I, fast$I, tolerance = 1e-10, check.attributes = FALSE)))
+  })
+}
+
 check_block_products()
 check_reader_preserves_p_character()
 check_sumstats_fast_reader()
 check_munge_fast_reader()
+check_ldsc_fast_reader()
+check_ldsc_full_fast_reader()
 
 cat("prep fast path tests passed\n")
