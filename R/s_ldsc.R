@@ -56,52 +56,25 @@ s_ldsc <- function(traits,sample.prev=NULL,population.prev=NULL,ld,wld,frq,trait
   ##determine name of LD score files
   x.files <- sort(Sys.glob(paste0(ld1,"*l2.ldscore*")))
   
-  ##function to read in the files. used with ldply below
-  if(Operating == "Darwin"){
-    readLdFunc <- function(LD.in){
-      if(substr(x=LD.in,start=nchar(LD.in)-1,stop=nchar(LD.in))=="gz"){
-        dum <- fread(input=paste("gzcat", LD.in), header=T, showProgress=F, data.table=F)
-      }else{
-        dum <- fread(input=LD.in, header=T, showProgress=F, data.table=F)
-      }
-    }}
-  
-  if(Operating == "Linux"){
-    readLdFunc <- function(LD.in){
-      if(substr(x=LD.in,start=nchar(LD.in)-1,stop=nchar(LD.in))=="gz"){
-        dum <- fread(input=paste("zcat", LD.in), header=T, showProgress=F, data.table=F)
-      }else{
-        dum <- fread(input=LD.in, header=T, showProgress=F, data.table=F)
-      } 
-    }}
-  
-  
-  if(Operating == "Windows"){
-    readLdFunc <- function(LD.in){
-      dum <- fread(input=LD.in, header=T, showProgress=F, data.table=F)
-    }
-  }
-  
-  x <- suppressMessages(ldply(.data=x.files,.fun=readLdFunc))
+  x <- suppressMessages(.ldsc_read_file_list(x.files))
   x$CM <- NULL
   x$MAF <- NULL
   
   ##read in the M_5_50 files (number of SNPs in annotation by chromosome)
   m.files <- sort(Sys.glob(paste0(ld1,"*M_5_50")))
-  readMFunc <- function(x){dum <- read.table(file=x, header=F)}
-  m <- ldply(.data=m.files,.fun=readMFunc)
+  m <- .ldsc_read_m_file_list(m.files)
   
   ##read in additional annotations on top of baseline if relevant
   if(!is.null(ld2)){
     for(i in 1:length(ld2)){
       .LOG("Reading in LD scores from ",paste0(ld2[i],".[1-22]"),"\n", file=log.file)
       extra.x.files <- sort(Sys.glob(paste0(ld2[i],"*l2.ldscore*")))
-      extra.ldscore <- suppressMessages(ldply(.data=extra.x.files,.fun=readLdFunc))
+      extra.ldscore <- suppressMessages(.ldsc_read_file_list(extra.x.files))
       extra.ldscore$CHR <- NULL
       extra.ldscore$BP <- NULL
       if(ncol(extra.ldscore)==2){colnames(extra.ldscore)[2] <- c(ld2[i])}
       extra.m.files <- sort(Sys.glob(paste0(ld2[i],"*M_5_50")))
-      extra.m <- suppressMessages(ldply(.data=extra.m.files,.fun=readMFunc))
+      extra.m <- suppressMessages(.ldsc_read_m_file_list(extra.m.files))
       if(identical(as.character(x$SNP),as.character(extra.ldscore$SNP))==T){
         colnames.x <- colnames(x)
         colnames.extra.ldscore <- colnames(extra.ldscore)[2:ncol(extra.ldscore)]
@@ -141,7 +114,7 @@ s_ldsc <- function(traits,sample.prev=NULL,population.prev=NULL,ld,wld,frq,trait
   
   
   w.files <- sort(Sys.glob(paste0(wld,"*l2.ldscor*")))
-  w <- suppressMessages(ldply(w.files,readLdFunc))
+  w <- suppressMessages(.ldsc_read_file_list(w.files))
   w$CM <- NULL
   w$MAF <- NULL
   colnames(w)[ncol(w)] <- "wLD"

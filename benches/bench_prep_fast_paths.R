@@ -16,6 +16,8 @@ genomicssem_ns <- asNamespace("GenomicSEM")
 .ldsc_read_table <- get(".ldsc_read_table", envir = genomicssem_ns)
 .ldsc_read_chromosome_tables <- get(".ldsc_read_chromosome_tables", envir = genomicssem_ns)
 .ldsc_read_m_files <- get(".ldsc_read_m_files", envir = genomicssem_ns)
+.ldsc_read_file_list <- get(".ldsc_read_file_list", envir = genomicssem_ns)
+.ldsc_read_m_file_list <- get(".ldsc_read_m_file_list", envir = genomicssem_ns)
 
 with_temp_cwd <- function(code) {
   old <- getwd()
@@ -265,6 +267,25 @@ bench_ldsc_read <- function() {
         n_blocks = NA_integer_,
         elapsed_sec = timed$elapsed,
         checksum = checksum_df(timed$value$ld) + checksum_df(timed$value$m) + checksum_df(timed$value$trait),
+        stringsAsFactors = FALSE
+      )
+
+      timed_list <- time_expr({
+        ld <- .ldsc_read_file_list(paste0(seq_len(n_chrom), ".l2.ldscore.gz"))
+        m <- .ldsc_read_m_file_list(paste0(seq_len(n_chrom), ".l2.M_5_50"))
+        list(ld = ld, m = m)
+      })
+      rows[[length(rows) + 1L]] <- data.frame(
+        workflow = "s_ldsc_read",
+        fast_table_read = NA,
+        fast_snp_join = NA,
+        fast_ldsc_read = fast,
+        n_snp = n_snp,
+        n_traits = NA_integer_,
+        n_annot = 1L,
+        n_blocks = NA_integer_,
+        elapsed_sec = timed_list$elapsed,
+        checksum = checksum_df(timed_list$value$ld) + checksum_df(timed_list$value$m),
         stringsAsFactors = FALSE
       )
     }

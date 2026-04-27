@@ -390,6 +390,16 @@ return(S_Full)
   as.data.frame(rbindlist(tables, use.names = TRUE, fill = TRUE))
 }
 
+.ldsc_read_file_list <- function(files) {
+  tables <- lapply(files, .ldsc_read_table)
+  as.data.frame(rbindlist(tables, use.names = TRUE, fill = TRUE))
+}
+
+.ldsc_read_m_file_list <- function(files) {
+  tables <- lapply(files, .ldsc_read_m)
+  as.data.frame(rbindlist(tables, use.names = TRUE, fill = TRUE))
+}
+
 .ldsc_block_products <- function(weighted.LD, weighted.chi, n.blocks) {
   weighted.LD <- as.matrix(weighted.LD)
   weighted.chi <- as.numeric(weighted.chi)

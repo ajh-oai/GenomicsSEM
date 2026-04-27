@@ -3,7 +3,7 @@ Log of version histories.
 **0.0.5d** Rust-backed GWAS fast paths.
 This development update adds native Rust kernels and opt-in batched model-fitting fast paths for supported `commonfactorGWAS()` and `userGWAS()` DWLS workflows. The fast paths keep the existing R output shape and fall back to the lavaan implementation for unsupported inputs unless `options(GenomicSEM.fast_strict=TRUE)` is set. Use `options(GenomicSEM.fast_diagnostics=TRUE)` or inspect the `GenomicSEM.fast_path` result attribute to verify whether a run used the Rust batch path.
 
-The same development line also accelerates raw summary-stat preparation. `munge()` and `sumstats()` now stream serial inputs one file at a time and use a faster `data.table::fread()` parser by default via `options(GenomicSEM.fast_table_read=TRUE)`, with fallback to the legacy `read.table()` parser for compatibility. `ldsc()` also uses faster `fread()`-based chromosome, weight, M, and trait table ingestion by default via `options(GenomicSEM.fast_ldsc_read=TRUE)`.
+The same development line also accelerates raw summary-stat preparation. `munge()` and `sumstats()` now stream serial inputs one file at a time and use a faster `data.table::fread()` parser by default via `options(GenomicSEM.fast_table_read=TRUE)`, with fallback to the legacy `read.table()` parser for compatibility. `ldsc()` and `s_ldsc()` also use faster `fread()`-based chromosome, weight, M, and trait table ingestion by default via `options(GenomicSEM.fast_ldsc_read=TRUE)`.
 
 **0.0.1** Initial release  
 Able to perfrom all analysis in preprint

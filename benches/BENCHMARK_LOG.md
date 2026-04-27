@@ -739,6 +739,7 @@ Change set:
 - Added `benches/bench_prep_fast_paths.R` for `munge()`, `sumstats()`, `ldsc()` reader, and LDSC block-product timing.
 - Added `options(GenomicSEM.fast_table_read=TRUE)` default path using `data.table::fread(check.names=TRUE)` with `read.table()` fallback.
 - Added `options(GenomicSEM.fast_ldsc_read=TRUE)` default path using `data.table::fread()` for `ldsc()` chromosome, weight, M, and trait summary-stat ingestion.
+- Reused the same reader helpers in `s_ldsc()` to replace `plyr::ldply()` during LD-score, M, and weight file ingestion.
 - Serial `munge()` and `sumstats()` now stream trait files one at a time instead of preloading all files.
 - Tried a custom SNP join helper behind `options(GenomicSEM.fast_snp_join=TRUE)`, but left it disabled by default because it was neutral/slightly slower locally.
 - Centralized LDSC block-product code; the attempted cumulative-product variant was backed out after benchmarking because the original BLAS `crossprod()` loop is already faster and much more memory-stable for `s_ldsc()` with many annotations.
@@ -770,12 +771,14 @@ Local result summary:
 | munge | TRUE | TRUE | NA | 100000 | 2 | 1.218 | 2000699000 |
 | ldsc_block_old_loop | NA | NA | NA | 100000 | NA | 0.003 | 199734.4 |
 | ldsc_block_fast | NA | NA | NA | 100000 | NA | 0.001 | 199734.4 |
-| ldsc_read | NA | NA | FALSE | 100000 | 1 | 0.225 | 6001087000 |
-| ldsc_read | NA | NA | TRUE | 100000 | 1 | 0.096 | 6001087000 |
+| ldsc_read | NA | NA | FALSE | 100000 | 1 | 0.213 | 6001087000 |
+| s_ldsc_read | NA | NA | FALSE | 100000 | NA | 0.102 | 5001479000 |
+| ldsc_read | NA | NA | TRUE | 100000 | 1 | 0.113 | 6001087000 |
+| s_ldsc_read | NA | NA | TRUE | 100000 | NA | 0.084 | 5001479000 |
 
 Interpretation:
 
 - The high-impact prep-path change is file ingestion and streaming: on this local 100k-SNP/2-trait synthetic run, `sumstats()` improves `1.496s -> 0.657s` and `munge()` improves `1.931s -> 1.188s`.
-- The new `ldsc()` reader improves the synthetic chromosome/trait ingestion benchmark `0.225s -> 0.096s`.
+- The new `ldsc()` reader improves the synthetic chromosome/trait ingestion benchmark `0.213s -> 0.113s`; the analogous `s_ldsc()` file-list reader improves `0.102s -> 0.084s` on the same local synthetic files.
 - The custom SNP join did not justify enabling; it remains opt-in for further experiments only.
 - LDSC jackknife block crossproducts are not the current bottleneck for ordinary `ldsc()`; further LDSC work should focus on file ingestion/merging and stratified annotation data movement rather than replacing the existing `crossprod()` loop in R.

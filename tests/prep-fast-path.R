@@ -5,6 +5,8 @@ genomicssem_ns <- asNamespace("GenomicSEM")
 .read_sumstats_table <- get(".read_sumstats_table", envir = genomicssem_ns)
 .ldsc_read_chromosome_tables <- get(".ldsc_read_chromosome_tables", envir = genomicssem_ns)
 .ldsc_read_m_files <- get(".ldsc_read_m_files", envir = genomicssem_ns)
+.ldsc_read_file_list <- get(".ldsc_read_file_list", envir = genomicssem_ns)
+.ldsc_read_m_file_list <- get(".ldsc_read_m_file_list", envir = genomicssem_ns)
 
 with_temp_cwd <- function(code) {
   old <- getwd()
@@ -178,13 +180,19 @@ check_ldsc_fast_reader <- function() {
     options(GenomicSEM.fast_ldsc_read = FALSE)
     fallback_ld <- .ldsc_read_chromosome_tables(".", ".l2.ldscore.gz", 1:2)
     fallback_m <- .ldsc_read_m_files(".", 1:2)
+    fallback_ld_list <- .ldsc_read_file_list(paste0(1:2, ".l2.ldscore.gz"))
+    fallback_m_list <- .ldsc_read_m_file_list(paste0(1:2, ".l2.M_5_50"))
 
     options(GenomicSEM.fast_ldsc_read = TRUE)
     fast_ld <- .ldsc_read_chromosome_tables(".", ".l2.ldscore.gz", 1:2)
     fast_m <- .ldsc_read_m_files(".", 1:2)
+    fast_ld_list <- .ldsc_read_file_list(paste0(1:2, ".l2.ldscore.gz"))
+    fast_m_list <- .ldsc_read_m_file_list(paste0(1:2, ".l2.M_5_50"))
 
     stopifnot(isTRUE(all.equal(as.data.frame(fallback_ld), as.data.frame(fast_ld), check.attributes = FALSE)))
     stopifnot(identical(as.numeric(as.matrix(fallback_m)), as.numeric(as.matrix(fast_m))))
+    stopifnot(isTRUE(all.equal(as.data.frame(fallback_ld_list), as.data.frame(fast_ld_list), check.attributes = FALSE)))
+    stopifnot(identical(as.numeric(as.matrix(fallback_m_list)), as.numeric(as.matrix(fast_m_list))))
   })
 }
 
