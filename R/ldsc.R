@@ -256,30 +256,19 @@ ldsc <- function(traits, sample.prev, population.prev, ld, wld,
         n.annot <- 1
 
 
-        select.from <- floor(seq(from=1,to=n.snps,length.out =(n.blocks+1)))
-        select.to <- c(select.from[2:n.blocks]-1,n.snps)
-
-        xty.block.values <- matrix(data=NA,nrow=n.blocks,ncol =(n.annot+1))
-        xtx.block.values <- matrix(data=NA,nrow =((n.annot+1)* n.blocks),ncol =(n.annot+1))
-        colnames(xty.block.values)<- colnames(xtx.block.values)<- colnames(weighted.LD)
-        replace.from <- seq(from=1,to=nrow(xtx.block.values),by =(n.annot+1))
-        replace.to <- seq(from =(n.annot+1),to=nrow(xtx.block.values),by =(n.annot+1))
-        for(i in 1:n.blocks){
-          xty.block.values[i,] <- t(t(weighted.LD[select.from[i]:select.to[i],])%*% weighted.chi[select.from[i]:select.to[i],])
-          xtx.block.values[replace.from[i]:replace.to[i],] <- as.matrix(t(weighted.LD[select.from[i]:select.to[i],])%*% weighted.LD[select.from[i]:select.to[i],])
-        }
-        xty <- as.matrix(colSums(xty.block.values))
-        xtx <- matrix(data=NA,nrow =(n.annot+1),ncol =(n.annot+1))
-        colnames(xtx)<- colnames(weighted.LD)
-        for(i in 1:nrow(xtx)){xtx[i,] <- t(colSums(xtx.block.values[seq(from=i,to=nrow(xtx.block.values),by=ncol(weighted.LD)),]))}
+        block.products <- .ldsc_block_products(weighted.LD, weighted.chi, n.blocks)
+        xty.block.values <- block.products$xty.block.values
+        xtx.block.values <- block.products$xtx.block.values
+        xty <- block.products$xty
+        xtx <- block.products$xtx
 
         reg <- solve(xtx, xty)
         intercept <- reg[2]
         coefs <- reg[1]/N.bar
         reg.tot <- coefs*m
 
-        delete.from <- seq(from=1,to=nrow(xtx.block.values),by=ncol(xtx.block.values))
-        delete.to <- seq(from=ncol(xtx.block.values),to=nrow(xtx.block.values),by=ncol(xtx.block.values))
+        delete.from <- block.products$delete.from
+        delete.to <- block.products$delete.to
         delete.values <- matrix(data=NA,nrow=n.blocks,ncol =(n.annot+1))
         colnames(delete.values)<- colnames(weighted.LD)
         for(i in 1:n.blocks){
@@ -399,30 +388,19 @@ ldsc <- function(traits, sample.prev, population.prev, ld, wld,
         n.annot <- 1
 
 
-        select.from <- floor(seq(from=1,to=n.snps,length.out =(n.blocks+1)))
-        select.to <- c(select.from[2:n.blocks]-1,n.snps)
-
-        xty.block.values <- matrix(data=NA,nrow=n.blocks,ncol =(n.annot+1))
-        xtx.block.values <- matrix(data=NA,nrow =((n.annot+1)* n.blocks),ncol =(n.annot+1))
-        colnames(xty.block.values)<- colnames(xtx.block.values)<- colnames(weighted.LD)
-        replace.from <- seq(from=1,to=nrow(xtx.block.values),by =(n.annot+1))
-        replace.to <- seq(from =(n.annot+1),to=nrow(xtx.block.values),by =(n.annot+1))
-        for(i in 1:n.blocks){
-          xty.block.values[i,] <- t(t(weighted.LD[select.from[i]:select.to[i],])%*% weighted.chi[select.from[i]:select.to[i],])
-          xtx.block.values[replace.from[i]:replace.to[i],] <- as.matrix(t(weighted.LD[select.from[i]:select.to[i],])%*% weighted.LD[select.from[i]:select.to[i],])
-        }
-        xty <- as.matrix(colSums(xty.block.values))
-        xtx <- matrix(data=NA,nrow =(n.annot+1),ncol =(n.annot+1))
-        colnames(xtx)<- colnames(weighted.LD)
-        for(i in 1:nrow(xtx)){xtx[i,] <- t(colSums(xtx.block.values[seq(from=i,to=nrow(xtx.block.values),by=ncol(weighted.LD)),]))}
+        block.products <- .ldsc_block_products(weighted.LD, weighted.chi, n.blocks)
+        xty.block.values <- block.products$xty.block.values
+        xtx.block.values <- block.products$xtx.block.values
+        xty <- block.products$xty
+        xtx <- block.products$xtx
 
         reg <- solve(xtx, xty)
         intercept <- reg[2]
         coefs <- reg[1]/N.bar
         reg.tot <- coefs*m
 
-        delete.from <- seq(from=1,to=nrow(xtx.block.values),by=ncol(xtx.block.values))
-        delete.to <- seq(from=ncol(xtx.block.values),to=nrow(xtx.block.values),by=ncol(xtx.block.values))
+        delete.from <- block.products$delete.from
+        delete.to <- block.products$delete.to
         delete.values <- matrix(data=NA,nrow=n.blocks,ncol =(n.annot+1))
         colnames(delete.values)<- colnames(weighted.LD)
         for(i in 1:n.blocks){

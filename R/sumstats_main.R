@@ -3,7 +3,7 @@
   if (!is.null(file)) {
     file <- data.frame(file)
   } else{
-    file <- data.frame(read.table(filename, header = T, quote="\"",fill=T,na.string=c(".",NA,"NA","")))
+    file <- data.frame(.read_sumstats_table(filename, p_as_character = TRUE))
   }
   if (!is.null(utilfuncs)) {
     for (j in names(utilfuncs)) {
@@ -35,6 +35,9 @@
                                       stop_on_missing = stop_on_missing,
                                       utilfuncs)
   colnames(file) <- hold_names
+  if ("P" %in% colnames(file)) {
+    file$P <- as.character(file$P)
+  }
   if (N_provided) {
     file$N <- N
     if(OLS){

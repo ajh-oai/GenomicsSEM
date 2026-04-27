@@ -82,14 +82,10 @@ sumstats <- function(files,ref,trait.names=NULL,se.logit,OLS=NULL,linprob=NULL,N
   data.frame.out <- ref
   
   if(!parallel){
-    ##note that fread is not used here as we have observed different formatting for column headers causing mismatched columns
-    files <- lapply(files, read.table, header=T, quote="\"", fill=T, colClasses = c(P = "character"), na.string=c(".", NA, "NA", ""))
-    
-    .LOG("All files loaded into R!",file=log.file)
     Output <- list()
     for(i in 1:len){
       Output[[i]] <- .sumstats_main(i, utilfuncs=NULL, filenames[i], trait.names[i], N[i], keep.indel, OLS[i], betas[i],
-                                    info.filter, linprob[i], se.logit[i], names.beta[i], names.se[i], ref, ref2, files[[i]], log.file, direct.filter)
+                                    info.filter, linprob[i], se.logit[i], names.beta[i], names.se[i], ref, ref2, NULL, log.file, direct.filter)
     }
   }else {
     if(is.null(cores)){
@@ -112,6 +108,8 @@ sumstats <- function(files,ref,trait.names=NULL,se.logit,OLS=NULL,linprob=NULL,N
     utilfuncs[[".get_renamed_colnames"]] <- .get_renamed_colnames
     utilfuncs[[".LOG"]] <- .LOG
     utilfuncs[["inner_join"]] <- inner_join
+    utilfuncs[[".read_sumstats_table"]] <- .read_sumstats_table
+    utilfuncs[[".read_sumstats_table_fallback"]] <- .read_sumstats_table_fallback
     .LOG("As parallel sumstats was requested, logs of each file will be saved separately",file=log.file)
     Output <- foreach (i=1:length(filenames), .export=c(".sumstats_main"), .packages=c("stringr")) %dopar% {
       .sumstats_main(i, utilfuncs, filenames[i], trait.names[i], N[i], keep.indel, OLS[i], betas[i],

@@ -246,6 +246,110 @@ return(S_Full)
   out
 }
 
+.read_sumstats_table_fallback <- function(filename, p_as_character = FALSE) {
+  if (p_as_character) {
+    return(read.table(filename, header = TRUE, quote = "\"", fill = TRUE,
+                      colClasses = c(P = "character"),
+                      na.strings = c(".", "NA", "")))
+  }
+
+  read.table(filename, header = TRUE, quote = "\"", fill = TRUE,
+             na.strings = c(".", "NA", ""))
+}
+
+.read_sumstats_table <- function(filename, p_as_character = FALSE) {
+  if (!isTRUE(getOption("GenomicSEM.fast_table_read", TRUE))) {
+    return(.read_sumstats_table_fallback(filename, p_as_character))
+  }
+
+  col_classes <- NULL
+  if (p_as_character) {
+    col_classes <- c(P = "character")
+  }
+
+  out <- tryCatch(
+    suppressWarnings(fread(
+      filename,
+      header = TRUE,
+      fill = TRUE,
+      data.table = FALSE,
+      check.names = TRUE,
+      colClasses = col_classes,
+      na.strings = c(".", "NA", ""),
+      showProgress = FALSE
+    )),
+    error = function(e) NULL
+  )
+
+  if (is.null(out)) {
+    return(.read_sumstats_table_fallback(filename, p_as_character))
+  }
+
+  if (p_as_character && "P" %in% names(out)) {
+    out$P <- as.character(out$P)
+  }
+
+  out
+}
+
+.ldsc_block_products <- function(weighted.LD, weighted.chi, n.blocks) {
+  weighted.LD <- as.matrix(weighted.LD)
+  weighted.chi <- as.numeric(weighted.chi)
+
+  n.snps <- nrow(weighted.LD)
+  n.annot <- ncol(weighted.LD)
+  select.from <- floor(seq(from = 1, to = n.snps, length.out = n.blocks + 1))
+  select.from <- select.from[seq_len(n.blocks)]
+  select.to <- if (n.blocks == 1L) n.snps else c(select.from[2:n.blocks] - 1, n.snps)
+
+  block_sums <- function(values) {
+    if (is.null(dim(values))) {
+      values <- matrix(values, ncol = 1)
+    }
+    cumulative <- matrix(0, nrow = nrow(values) + 1L, ncol = ncol(values))
+    for (j in seq_len(ncol(values))) {
+      cumulative[-1L, j] <- cumsum(values[, j])
+    }
+    cumulative[select.to + 1, , drop = FALSE] - cumulative[select.from, , drop = FALSE]
+  }
+
+  xty.block.values <- block_sums(weighted.LD * weighted.chi)
+  colnames(xty.block.values) <- colnames(weighted.LD)
+
+  xtx.products <- matrix(NA_real_, nrow = n.snps, ncol = n.annot * n.annot)
+  product_col <- 1L
+  for (col in seq_len(n.annot)) {
+    for (row in seq_len(n.annot)) {
+      xtx.products[, product_col] <- weighted.LD[, row] * weighted.LD[, col]
+      product_col <- product_col + 1L
+    }
+  }
+
+  xtx.block.sums <- block_sums(xtx.products)
+  xtx.block.values <- matrix(NA_real_, nrow = n.annot * n.blocks, ncol = n.annot)
+  for (i in seq_len(n.blocks)) {
+    rows <- ((i - 1L) * n.annot + 1L):(i * n.annot)
+    xtx.block.values[rows, ] <- matrix(xtx.block.sums[i, ], nrow = n.annot, ncol = n.annot)
+  }
+  colnames(xtx.block.values) <- colnames(weighted.LD)
+
+  xty <- as.matrix(colSums(xty.block.values))
+  xtx <- matrix(NA_real_, nrow = n.annot, ncol = n.annot)
+  colnames(xtx) <- colnames(weighted.LD)
+  for (i in seq_len(n.annot)) {
+    xtx[i, ] <- colSums(xtx.block.values[seq(from = i, to = nrow(xtx.block.values), by = n.annot), , drop = FALSE])
+  }
+
+  list(
+    xty.block.values = xty.block.values,
+    xtx.block.values = xtx.block.values,
+    xty = xty,
+    xtx = xtx,
+    delete.from = seq(from = 1, to = nrow(xtx.block.values), by = n.annot),
+    delete.to = seq(from = n.annot, to = nrow(xtx.block.values), by = n.annot)
+  )
+}
+
 .get_V_full_r <- .get_V_full
 .get_V_SNP_r <- .get_V_SNP
 .get_S_Full_r <- .get_S_Full

@@ -12,7 +12,7 @@
     }
   }
   if (is.null(file)) {
-    file <- read.table(filename, header=T, quote="\"", fill=T, na.string=c(".", NA, "NA", ""))
+    file <- .read_sumstats_table(filename)
   }
   .LOG("Munging file: ", filename,file=log.file, print=TRUE)
 

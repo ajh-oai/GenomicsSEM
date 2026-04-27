@@ -61,11 +61,8 @@ munge <- function(files,hm3,trait.names=NULL,N=NULL,info.filter = .9,maf.filter=
   ref <- fread(hm3,header=T,data.table=F)
   if (!parallel) {
     .LOG("Reading summary statistics for ", paste(files,collapse=" "), ". Please note that this step usually takes a few minutes due to the size of summary statistic files.", file=log.file)
-    ##note that fread is not used here due to formatting differences across summary statistic files
-    files <- lapply(files, read.table, header=T, quote="\"", fill=T, na.string=c(".", NA, "NA", ""))
-    .LOG("All files loaded into R!",file=log.file)
-    for(i in 1:length(files)){
-      .munge_main(i, NULL, files[[i]], filenames[i], trait.names[i], N[i], ref, hm3, info.filter, maf.filter, column.names, overwrite, log.file)
+    for(i in 1:length(filenames)){
+      .munge_main(i, NULL, NULL, filenames[i], trait.names[i], N[i], ref, hm3, info.filter, maf.filter, column.names, overwrite, log.file)
     }
   } else {
     if(is.null(cores)){
@@ -88,6 +85,8 @@ munge <- function(files,hm3,trait.names=NULL,N=NULL,info.filter = .9,maf.filter=
     utilfuncs[[".get_renamed_colnames"]] <- .get_renamed_colnames
     utilfuncs[[".LOG"]] <- .LOG
     utilfuncs[["gzip"]] <- gzip
+    utilfuncs[[".read_sumstats_table"]] <- .read_sumstats_table
+    utilfuncs[[".read_sumstats_table_fallback"]] <- .read_sumstats_table_fallback
     .LOG("As parallel munging was requested, logs of each sumstats file will be saved separately",file=log.file)
     foreach (i=1:length(filenames), .export=c(".munge_main"), .packages=c("stringr")) %dopar% {
       .munge_main(i, utilfuncs, NULL, filenames[i], trait.names[i], N[i], ref, hm3, info.filter, maf.filter, column.names, overwrite, NULL)
