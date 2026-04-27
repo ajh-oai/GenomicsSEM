@@ -292,6 +292,41 @@ return(S_Full)
   out
 }
 
+.snp_inner_join_fallback <- function(x, y, by, mode) {
+  if (identical(mode, "merge")) {
+    return(merge(x, y, by = by, all.x = FALSE, all.y = FALSE))
+  }
+
+  suppressWarnings(inner_join(x, y, by = by))
+}
+
+.snp_inner_join <- function(x, y, by = "SNP", mode = "inner_join", sort_by_snp = FALSE) {
+  if (!isTRUE(getOption("GenomicSEM.fast_snp_join", FALSE)) ||
+      anyDuplicated(x[[by]]) || anyDuplicated(y[[by]])) {
+    return(.snp_inner_join_fallback(x, y, by, mode))
+  }
+
+  y_match <- match(x[[by]], y[[by]])
+  keep <- !is.na(y_match)
+  x_out <- x[keep, , drop = FALSE]
+  y_out <- y[y_match[keep], setdiff(names(y), by), drop = FALSE]
+
+  common <- intersect(names(x_out), names(y_out))
+  if (length(common) > 0L) {
+    names(x_out)[match(common, names(x_out))] <- paste0(common, ".x")
+    names(y_out)[match(common, names(y_out))] <- paste0(common, ".y")
+  }
+
+  out <- cbind.data.frame(x_out, y_out, stringsAsFactors = FALSE)
+  rownames(out) <- NULL
+  if (sort_by_snp && nrow(out) > 1L) {
+    out <- out[order(out[[by]]), , drop = FALSE]
+    rownames(out) <- NULL
+  }
+
+  out
+}
+
 .ldsc_block_products <- function(weighted.LD, weighted.chi, n.blocks) {
   weighted.LD <- as.matrix(weighted.LD)
   weighted.chi <- as.numeric(weighted.chi)
@@ -302,35 +337,16 @@ return(S_Full)
   select.from <- select.from[seq_len(n.blocks)]
   select.to <- if (n.blocks == 1L) n.snps else c(select.from[2:n.blocks] - 1, n.snps)
 
-  block_sums <- function(values) {
-    if (is.null(dim(values))) {
-      values <- matrix(values, ncol = 1)
-    }
-    cumulative <- matrix(0, nrow = nrow(values) + 1L, ncol = ncol(values))
-    for (j in seq_len(ncol(values))) {
-      cumulative[-1L, j] <- cumsum(values[, j])
-    }
-    cumulative[select.to + 1, , drop = FALSE] - cumulative[select.from, , drop = FALSE]
-  }
-
-  xty.block.values <- block_sums(weighted.LD * weighted.chi)
-  colnames(xty.block.values) <- colnames(weighted.LD)
-
-  xtx.products <- matrix(NA_real_, nrow = n.snps, ncol = n.annot * n.annot)
-  product_col <- 1L
-  for (col in seq_len(n.annot)) {
-    for (row in seq_len(n.annot)) {
-      xtx.products[, product_col] <- weighted.LD[, row] * weighted.LD[, col]
-      product_col <- product_col + 1L
-    }
-  }
-
-  xtx.block.sums <- block_sums(xtx.products)
+  xty.block.values <- matrix(NA_real_, nrow = n.blocks, ncol = n.annot)
   xtx.block.values <- matrix(NA_real_, nrow = n.annot * n.blocks, ncol = n.annot)
   for (i in seq_len(n.blocks)) {
-    rows <- ((i - 1L) * n.annot + 1L):(i * n.annot)
-    xtx.block.values[rows, ] <- matrix(xtx.block.sums[i, ], nrow = n.annot, ncol = n.annot)
+    rows <- select.from[i]:select.to[i]
+    out.rows <- ((i - 1L) * n.annot + 1L):(i * n.annot)
+    weighted.LD.block <- weighted.LD[rows, , drop = FALSE]
+    xty.block.values[i, ] <- crossprod(weighted.LD.block, weighted.chi[rows])
+    xtx.block.values[out.rows, ] <- crossprod(weighted.LD.block)
   }
+  colnames(xty.block.values) <- colnames(weighted.LD)
   colnames(xtx.block.values) <- colnames(weighted.LD)
 
   xty <- as.matrix(colSums(xty.block.values))

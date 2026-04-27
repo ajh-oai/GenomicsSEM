@@ -56,7 +56,7 @@ Please note that this is likely effective sample size cut in half. The function 
   .LOG("Merging file:", filename, " with the reference file:", hm3,file=log.file)
   b <- nrow(file)
   .LOG(b, " rows present in the full ", filename, " summary statistics file.",file=log.file)
-  file <- merge(ref,file,by="SNP",all.x=F,all.y=F)
+  file <- .snp_inner_join(ref, file, by = "SNP", mode = "merge", sort_by_snp = TRUE)
   .LOG((b-nrow(file)), " rows were removed from the ", filename, " summary statistics file as the rs-ids for these rows were not present in the reference file.",file=log.file)
   
   ##remove any rows with missing p-values

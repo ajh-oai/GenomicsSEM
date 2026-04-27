@@ -731,3 +731,47 @@ R CMD check --no-manual GenomicSEM_0.0.5.tar.gz
 ```
 
 `R CMD check` status: 8 WARNINGs, 4 NOTEs. The warnings/notes are the remaining pre-existing package-level items plus the Rust static-library `_abort` note; all package tests passed. The touched `commonfactorGWAS` and `userGWAS` Rd mismatch warnings are cleared.
+
+## 2026-04-27 15:24 PDT - Prep-path parser and LDSC block benchmark
+
+Change set:
+
+- Added `benches/bench_prep_fast_paths.R` for `munge()`, `sumstats()`, and LDSC block-product timing.
+- Added `options(GenomicSEM.fast_table_read=TRUE)` default path using `data.table::fread(check.names=TRUE)` with `read.table()` fallback.
+- Serial `munge()` and `sumstats()` now stream trait files one at a time instead of preloading all files.
+- Tried a custom SNP join helper behind `options(GenomicSEM.fast_snp_join=TRUE)`, but left it disabled by default because it was neutral/slightly slower locally.
+- Centralized LDSC block-product code; the attempted cumulative-product variant was backed out after benchmarking because the original BLAS `crossprod()` loop is already faster and much more memory-stable for `s_ldsc()` with many annotations.
+
+Validation:
+
+```sh
+R CMD INSTALL --install-tests .
+Rscript tests/prep-fast-path.R
+```
+
+Local benchmark command:
+
+```sh
+Rscript benches/bench_prep_fast_paths.R 100000 2 1 200 1
+```
+
+Local result summary:
+
+| workflow | fast_table_read | fast_snp_join | n_snp | n_traits | elapsed_sec | checksum |
+|---|---|---|---:|---:|---:|---:|
+| sumstats | FALSE | FALSE | 100000 | 2 | 1.394 | 31028.76 |
+| munge | FALSE | FALSE | 100000 | 2 | 2.011 | 2000699000 |
+| sumstats | TRUE | FALSE | 100000 | 2 | 0.650 | 31028.76 |
+| munge | TRUE | FALSE | 100000 | 2 | 1.174 | 2000699000 |
+| sumstats | FALSE | TRUE | 100000 | 2 | 1.342 | 31028.76 |
+| munge | FALSE | TRUE | 100000 | 2 | 2.007 | 2000699000 |
+| sumstats | TRUE | TRUE | 100000 | 2 | 0.710 | 31028.76 |
+| munge | TRUE | TRUE | 100000 | 2 | 1.227 | 2000699000 |
+| ldsc_block_old_loop | NA | NA | 100000 | NA | 0.002 | 199734.4 |
+| ldsc_block_fast | NA | NA | 100000 | NA | 0.002 | 199734.4 |
+
+Interpretation:
+
+- The high-impact prep-path change is file ingestion and streaming: on this local 100k-SNP/2-trait synthetic run, `sumstats()` improves `1.394s -> 0.650s` and `munge()` improves `2.011s -> 1.174s`.
+- The custom SNP join did not justify enabling; it remains opt-in for further experiments only.
+- LDSC jackknife block crossproducts are not the current bottleneck for ordinary `ldsc()`; further LDSC work should focus on file ingestion/merging and stratified annotation data movement rather than replacing the existing `crossprod()` loop in R.

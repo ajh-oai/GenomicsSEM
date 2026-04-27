@@ -110,6 +110,8 @@ sumstats <- function(files,ref,trait.names=NULL,se.logit,OLS=NULL,linprob=NULL,N
     utilfuncs[["inner_join"]] <- inner_join
     utilfuncs[[".read_sumstats_table"]] <- .read_sumstats_table
     utilfuncs[[".read_sumstats_table_fallback"]] <- .read_sumstats_table_fallback
+    utilfuncs[[".snp_inner_join"]] <- .snp_inner_join
+    utilfuncs[[".snp_inner_join_fallback"]] <- .snp_inner_join_fallback
     .LOG("As parallel sumstats was requested, logs of each file will be saved separately",file=log.file)
     Output <- foreach (i=1:length(filenames), .export=c(".sumstats_main"), .packages=c("stringr")) %dopar% {
       .sumstats_main(i, utilfuncs, filenames[i], trait.names[i], N[i], keep.indel, OLS[i], betas[i],
@@ -117,7 +119,7 @@ sumstats <- function(files,ref,trait.names=NULL,se.logit,OLS=NULL,linprob=NULL,N
     }
   }
   for(i in 1:len){
-    data.frame.out <- suppressWarnings(inner_join(data.frame.out,Output[[i]],by="SNP"))
+    data.frame.out <- .snp_inner_join(data.frame.out, Output[[i]], by = "SNP", mode = "inner_join")
   }
   
   end.time <- Sys.time()

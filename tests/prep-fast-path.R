@@ -89,10 +89,11 @@ check_sumstats_fast_reader <- function() {
     write.table(ref, "ref.txt", row.names = FALSE, quote = FALSE)
     write.table(ss, "trait.txt", row.names = FALSE, quote = FALSE)
 
-    old <- getOption("GenomicSEM.fast_table_read")
-    on.exit(options(GenomicSEM.fast_table_read = old), add = TRUE)
+    old_read <- getOption("GenomicSEM.fast_table_read")
+    old_join <- getOption("GenomicSEM.fast_snp_join")
+    on.exit(options(GenomicSEM.fast_table_read = old_read, GenomicSEM.fast_snp_join = old_join), add = TRUE)
 
-    options(GenomicSEM.fast_table_read = FALSE)
+    options(GenomicSEM.fast_table_read = FALSE, GenomicSEM.fast_snp_join = FALSE)
     fallback <- suppressWarnings(sumstats(
       files = "trait.txt",
       ref = "ref.txt",
@@ -101,7 +102,7 @@ check_sumstats_fast_reader <- function() {
       parallel = FALSE
     ))
 
-    options(GenomicSEM.fast_table_read = TRUE)
+    options(GenomicSEM.fast_table_read = TRUE, GenomicSEM.fast_snp_join = TRUE)
     fast <- suppressWarnings(sumstats(
       files = "trait.txt",
       ref = "ref.txt",
@@ -123,10 +124,11 @@ check_munge_fast_reader <- function() {
     write.table(ref[, c("SNP", "A1", "A2")], "hm3.txt", row.names = FALSE, quote = FALSE)
     write.table(ss, "trait.txt", row.names = FALSE, quote = FALSE)
 
-    old <- getOption("GenomicSEM.fast_table_read")
-    on.exit(options(GenomicSEM.fast_table_read = old), add = TRUE)
+    old_read <- getOption("GenomicSEM.fast_table_read")
+    old_join <- getOption("GenomicSEM.fast_snp_join")
+    on.exit(options(GenomicSEM.fast_table_read = old_read, GenomicSEM.fast_snp_join = old_join), add = TRUE)
 
-    options(GenomicSEM.fast_table_read = FALSE)
+    options(GenomicSEM.fast_table_read = FALSE, GenomicSEM.fast_snp_join = FALSE)
     suppressWarnings(munge(
       files = "trait.txt",
       hm3 = "hm3.txt",
@@ -137,7 +139,7 @@ check_munge_fast_reader <- function() {
     ))
     fallback <- read.table(gzfile("trait_slow.sumstats.gz"), header = TRUE)
 
-    options(GenomicSEM.fast_table_read = TRUE)
+    options(GenomicSEM.fast_table_read = TRUE, GenomicSEM.fast_snp_join = TRUE)
     suppressWarnings(munge(
       files = "trait.txt",
       hm3 = "hm3.txt",

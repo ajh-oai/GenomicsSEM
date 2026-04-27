@@ -87,6 +87,8 @@ munge <- function(files,hm3,trait.names=NULL,N=NULL,info.filter = .9,maf.filter=
     utilfuncs[["gzip"]] <- gzip
     utilfuncs[[".read_sumstats_table"]] <- .read_sumstats_table
     utilfuncs[[".read_sumstats_table_fallback"]] <- .read_sumstats_table_fallback
+    utilfuncs[[".snp_inner_join"]] <- .snp_inner_join
+    utilfuncs[[".snp_inner_join_fallback"]] <- .snp_inner_join_fallback
     .LOG("As parallel munging was requested, logs of each sumstats file will be saved separately",file=log.file)
     foreach (i=1:length(filenames), .export=c(".munge_main"), .packages=c("stringr")) %dopar% {
       .munge_main(i, utilfuncs, NULL, filenames[i], trait.names[i], N[i], ref, hm3, info.filter, maf.filter, column.names, overwrite, NULL)
