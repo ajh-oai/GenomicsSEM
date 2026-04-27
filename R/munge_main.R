@@ -75,7 +75,9 @@ Please note that this is likely effective sample size cut in half. The function 
   
   ##determine whether it is OR or logistic/continuous effect based on median effect size 
   a1<-file$effect[[1]]
-  file$effect<-ifelse(rep(round(median(file$effect,na.rm=T)) == 1,nrow(file)), log(file$effect),file$effect)
+  if (round(median(file$effect, na.rm = TRUE)) == 1) {
+    file$effect <- log(file$effect)
+  }
   a2<-file$effect[[1]]
   if(a1 != a2) .LOG("The effect column was determined to be coded as an odds ratio (OR) for the ", filename, " summary statistics file. Please ensure this is correct.",file=log.file)
   

@@ -782,3 +782,27 @@ Interpretation:
 - The new `ldsc()` reader improves the synthetic chromosome/trait ingestion benchmark `0.213s -> 0.113s`; the analogous `s_ldsc()` file-list reader improves `0.102s -> 0.084s` on the same local synthetic files.
 - The custom SNP join did not justify enabling; it remains opt-in for further experiments only.
 - LDSC jackknife block crossproducts are not the current bottleneck for ordinary `ldsc()`; further LDSC work should focus on file ingestion/merging and stratified annotation data movement rather than replacing the existing `crossprod()` loop in R.
+
+## 2026-04-27 15:39 PDT - Avoid full-length OR-detection ifelse
+
+Change set:
+
+- Replaced the `ifelse(rep(condition, nrow(file)), log(effect), effect)` pattern in `munge_main` and `sumstats_main` with a scalar branch.
+- This avoids one full-length temporary vector for each trait file; it is mainly a memory/cleanup improvement rather than a clear wall-time shift.
+
+Validation:
+
+```sh
+R CMD INSTALL --install-tests .
+Rscript tests/prep-fast-path.R
+Rscript benches/bench_prep_fast_paths.R 100000 2 1 200 1
+```
+
+Local result summary for the default fast reader path:
+
+| workflow | elapsed_sec before-ish | elapsed_sec after | note |
+|---|---:|---:|---|
+| sumstats | 0.657 | 0.657 | unchanged within local noise |
+| munge | 1.188 | 1.233 | unchanged/slightly noisy; gzip and table IO dominate |
+| ldsc_read | 0.113 | 0.109 | unrelated reader path noise |
+| s_ldsc_read | 0.084 | 0.076 | unrelated reader path noise |

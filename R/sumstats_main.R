@@ -105,7 +105,9 @@
   
   ##determine whether it is OR or logistic/continuous effect based on median effect size
   a1<-file$effect[[1]]
-  file$effect <- ifelse(rep(round(median(file$effect,na.rm=T)) == 1,nrow(file)), log(file$effect),file$effect)
+  if (round(median(file$effect, na.rm = TRUE)) == 1) {
+    file$effect <- log(file$effect)
+  }
   a2<-file$effect[[1]]
   if(a1 != a2) .LOG("The effect column was determined to be coded as an odds ratio (OR) for the ", filename, " summary statistics file based on the median of the effect column being close to 1. Please ensure the interpretation of this column as an OR is correct.",file=log.file)
   if(a1 == a2) .LOG("The effect column was determined NOT to be coded as an odds ratio (OR) for the ", filename, " summary statistics file based on the median of the effect column being close to 0.",file=log.file)
