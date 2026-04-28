@@ -1165,8 +1165,8 @@ Please note that this is likely effective sample size cut in half. The function 
 
 .sem_fast_compile <- function(ptable, observed_names) {
   constraint_ops <- c(">", ">=", "<", "<=")
-  model_rows <- !(ptable$op %in% constraint_ops)
-  unsupported_ops <- setdiff(unique(ptable$op), c("=~", "~", "~~", constraint_ops))
+  model_rows <- !(ptable$op %in% c(constraint_ops, "da"))
+  unsupported_ops <- setdiff(unique(ptable$op), c("=~", "~", "~~", "da", constraint_ops))
   if (length(unsupported_ops) > 0L) {
     return(list(supported = FALSE, reason = paste("unsupported ops:", paste(unsupported_ops, collapse = ","))))
   }
