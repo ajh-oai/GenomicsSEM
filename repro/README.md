@@ -54,3 +54,34 @@ Rscript repro/grotzinger_2025_nature.R --model-snps 5 --prep-snps 1000 --cores 1
 ```
 
 Outputs are written to `repro/results/grotzinger_2025_nature_<timestamp>.csv`.
+
+## Public p-Factor Practical, O(1M) SNPs
+
+`pfactor_practical_1m.R` reruns the public GenomicSEM p-factor practical shape on real public
+summary statistics for SCZ, BIP, and MDD:
+
+- downloads the public PGC summary-stat files referenced by the practical workflow;
+- downloads `GenomicSEMPractical.RData` from the public UT Box practical materials and uses
+  `PSYCH_COV`;
+- builds a one-million-SNP aligned subset from the real public files using BIP allele frequencies as
+  the `sumstats()` reference;
+- benchmarks old R `sumstats()` vs the Rust prep engine;
+- benchmarks the constrained practical `userGWAS()` model old vs new, and runs the Rust path on the
+  full one-million-SNP table.
+
+Full old-vs-new 1M `userGWAS()` is intentionally controlled by `--old-gwas-snps`; set it equal to
+`--target-snps` for the full slow baseline.
+
+Run a small smoke test:
+
+```sh
+Rscript repro/pfactor_practical_1m.R --target-snps 1000 --old-gwas-snps 50 --cores 1
+```
+
+Run the intended 1M benchmark:
+
+```sh
+Rscript repro/pfactor_practical_1m.R --target-snps 1000000 --old-gwas-snps 1000000 --cores 1,4,16 --threads 16
+```
+
+Outputs are written to `repro/results/pfactor_practical_1m_<timestamp>.csv`.

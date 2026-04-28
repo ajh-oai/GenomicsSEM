@@ -21,6 +21,7 @@ target/
 *.o
 *.so
 benches/profiles/
+repro/data/
 repro/results/
 src/symbols.rds
 
