@@ -12,9 +12,16 @@
     }
   }
   if (is.null(file)) {
+    .LOG("Munging file: ", filename,file=log.file, print=TRUE)
+    fused <- .munge_fused_fast(filename, trait.name, N, ref, hm3, info.filter, maf.filter,
+                               column.names, overwrite, log.file, utilfuncs)
+    if (!is.null(fused)) {
+      return()
+    }
     file <- .read_sumstats_table(filename)
+  } else {
+    .LOG("Munging file: ", filename,file=log.file, print=TRUE)
   }
-  .LOG("Munging file: ", filename,file=log.file, print=TRUE)
 
   N_provided <- (!is.na(N))
   

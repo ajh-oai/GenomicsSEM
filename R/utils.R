@@ -540,6 +540,138 @@ return(S_Full)
   match(as.character(x), c("A", "C", "G", "T"))
 }
 
+.prep_read_header <- function(filename) {
+  con <- if (grepl("[.]gz$", filename, ignore.case = TRUE)) {
+    gzfile(filename, open = "rt")
+  } else {
+    file(filename, open = "rt")
+  }
+  on.exit(close(con), add = TRUE)
+
+  header <- readLines(con, n = 1L, warn = FALSE)
+  if (length(header) != 1L || !nzchar(header)) {
+    return(character())
+  }
+
+  strsplit(trimws(header), "[[:space:]]+")[[1]]
+}
+
+.prep_required_once <- function(hold_names, required) {
+  all(vapply(required, function(col) sum(hold_names == col) == 1L, logical(1)))
+}
+
+.prep_col_indices <- function(hold_names, columns) {
+  out <- vapply(columns, function(col) {
+    idx <- match(col, hold_names, nomatch = 0L)
+    as.integer(idx - 1L)
+  }, integer(1))
+  as.integer(unname(out))
+}
+
+.munge_fused_fast <- function(filename, trait.name, N, ref, hm3, info.filter, maf.filter,
+                              column.names, overwrite, log.file, utilfuncs = NULL) {
+  if (!.genomicssem_use_rust() || !isTRUE(getOption("GenomicSEM.fast_munge_engine", TRUE))) {
+    return(NULL)
+  }
+  if (!all(c("SNP", "A1", "A2") %in% names(ref)) || anyDuplicated(ref$SNP)) {
+    return(.fast_fallback("munge_fused", "reference file is missing required columns or has duplicate SNPs"))
+  }
+
+  header <- tryCatch(.prep_read_header(filename), error = function(e) NULL)
+  if (is.null(header) || length(header) == 0L) {
+    return(.fast_fallback("munge_fused", "could not read a simple whitespace-delimited header"))
+  }
+
+  N_provided <- (!is.na(N))
+  hold_names <- toupper(header)
+  n_multiplier <- 1
+  if (!N_provided && "NEFFDIV2" %in% hold_names) {
+    .LOG("Found an NEFFDIV2 column for sample size. \n
+Please note that this is likely effective sample size cut in half. The function is automatically doubling this value. This should only be used for liability h^2 conversion for binary traits and that it should reflect the sum of effective sample sizes across cohorts.", file=log.file)
+    hold_names[hold_names == "NEFFDIV2"] <- "NEFF"
+    n_multiplier <- 2
+  }
+  if (!N_provided && "NEFF_HALF" %in% hold_names) {
+    .LOG("Found an NEFF_HALF column for sample size. \n
+Please note that this is likely effective sample size cut in half. The function is automatically doubling this value. This should only be used for liability h^2 conversion for binary traits and that it should reflect the sum of effective sample sizes across cohorts.", file=log.file)
+    hold_names[hold_names == "NEFF_HALF"] <- "NEFF"
+    n_multiplier <- 2
+  }
+
+  hold_names <- .get_renamed_colnames(hold_names,
+                                      column.names, c("P", "A1", "A2", "effect", "SNP"), filename,
+                                      N_provided=N_provided, log.file=log.file,
+                                      warn_for_missing=c("P", "A1", "A2", "effect", "SNP", "N"),
+                                      utilfuncs=utilfuncs)
+  if (!.prep_required_once(hold_names, c("P", "A1", "A2", "effect", "SNP")) ||
+      (!N_provided && sum(hold_names == "N") != 1L)) {
+    return(.fast_fallback("munge_fused", "required columns were not uniquely identified"))
+  }
+
+  if (N_provided) {
+    .LOG("Using provided N (",N,") for file:",filename, file=log.file)
+  }
+
+  has_info <- "INFO" %in% hold_names
+  has_maf <- "MAF" %in% hold_names
+  col_indices <- .prep_col_indices(hold_names, c("SNP", "A1", "A2", "effect", "P", "N", "INFO", "MAF"))
+
+  trait.name <- str_replace_all(trait.name, fixed(" "), "")
+  output_file <- paste0(trait.name, ".sumstats")
+  native_error <- NULL
+  out <- tryCatch(
+    .Call(
+      "genomicssem_munge_fused_call",
+      as.character(filename),
+      as.character(output_file),
+      as.character(ref$SNP),
+      as.integer(.allele_code(ref$A1)),
+      as.integer(.allele_code(ref$A2)),
+      as.integer(col_indices),
+      as.numeric(if (N_provided) N else NA_real_),
+      as.numeric(n_multiplier),
+      as.numeric(info.filter),
+      as.numeric(maf.filter),
+      PACKAGE = "GenomicSEM"
+    ),
+    error = function(e) {
+      native_error <<- conditionMessage(e)
+      NULL
+    }
+  )
+  if (is.null(out)) {
+    reason <- if (is.null(native_error)) "native engine returned unsupported input" else native_error
+    return(.fast_fallback("munge_fused", reason))
+  }
+
+  rows <- out$rows
+  counts <- out$counts
+  .LOG("Merging file:", filename, " with the reference file:", hm3,file=log.file)
+  .LOG(as.integer(rows[1]), " rows present in the full ", filename, " summary statistics file.",file=log.file)
+  .LOG(as.integer(rows[1] - rows[2]), " rows were removed from the ", filename, " summary statistics file as the rs-ids for these rows were not present in the reference file.",file=log.file)
+
+  if (counts[1] > 0) .LOG(counts[1], " rows were removed from the ", filename, " summary statistics file due to missing values in the P-value column",file=log.file)
+  if (counts[2] > 0) .LOG(counts[2], " rows were removed from the ", filename, " summary statistics file due to missing values in the effect column",file=log.file)
+  if (counts[8] > 0) .LOG("The effect column was determined to be coded as an odds ratio (OR) for the ", filename, " summary statistics file. Please ensure this is correct.",file=log.file)
+  if (counts[3] > 0) .LOG(counts[3], " row(s) were removed from the ", filename, " summary statistics file due to the effect allele (A1) column not matching A1 or A2 in the reference file.",file=log.file)
+  if (counts[4] > 0) .LOG(counts[4], " row(s) were removed from the ", filename, " summary statistics file due to the other allele (A2) column not matching A1 or A2 in the reference file.",file=log.file)
+  if (counts[5] > 100) .LOG("In excess of 100 SNPs have P val above 1 or below 0. The P column may be mislabled!",file=log.file)
+  if (has_info) {
+    .LOG(counts[6], " rows were removed from the ", filename, " summary statistics file due to INFO values below the designated threshold of", info.filter,file=log.file)
+  }else{.LOG("No INFO column, cannot filter on INFO, which may influence results",file=log.file)}
+  if (has_maf) {
+    .LOG(counts[7], " rows were removed from the ", filename, " summary statistics file due to missing MAF information or MAFs below the designated threshold of", maf.filter,file=log.file)
+  }else{
+    .LOG("No MAF column, cannot filter on MAF, which may influence results",file=log.file)
+  }
+
+  .LOG(as.integer(rows[3]), "SNPs are left in the summary statistics file ", filename, " after QC.",file=log.file)
+  gzip(output_file, overwrite=overwrite)
+  .LOG("I am done munging file: ", filename,file=log.file)
+  .LOG("The file is saved as ", paste0(output_file, ".gz"), " in the current working directory.",file=log.file)
+  invisible(list(used = TRUE))
+}
+
 .munge_qc_fast <- function(file, info.filter, maf.filter) {
   if (!.genomicssem_use_rust() || !isTRUE(getOption("GenomicSEM.fast_munge_qc", TRUE))) {
     return(NULL)
@@ -582,6 +714,144 @@ return(S_Full)
     out$z <- out$z[seq_len(n)]
   }
   out
+}
+
+.sumstats_fused_fast <- function(filename, trait.name, N, keep.indel, OLS, beta, info.filter,
+                                 linprob, se.logit, name.beta, name.se, ref, ref2,
+                                 log.file, direct.filter, utilfuncs = NULL) {
+  if (!.genomicssem_use_rust() || !isTRUE(getOption("GenomicSEM.fast_sumstats_engine", TRUE))) {
+    return(NULL)
+  }
+  if (isTRUE(keep.indel) || isTRUE(direct.filter)) {
+    return(.fast_fallback("sumstats_fused", "keep.indel or direct.filter requires the R path"))
+  }
+  if (!all(c("SNP", "A1", "A2", "MAF") %in% names(ref)) || anyDuplicated(ref$SNP)) {
+    return(.fast_fallback("sumstats_fused", "reference file is missing required columns or has duplicate SNPs"))
+  }
+
+  header <- tryCatch(.prep_read_header(filename), error = function(e) NULL)
+  if (is.null(header) || length(header) == 0L) {
+    return(.fast_fallback("sumstats_fused", "could not read a simple whitespace-delimited header"))
+  }
+
+  .LOG("Preparing summary statistics for file: ", filename,file=log.file)
+  N_provided <- (!is.na(N))
+  if (linprob){
+    stop_on_missing <- c("effect", "SNP")
+  }  else if ((se.logit) | (all(!(c(linprob, OLS, se.logit))))) {
+    stop_on_missing <- c("effect", "SNP", "SE")
+  } else {
+    stop_on_missing <- c("effect", "SNP")
+  }
+
+  hold_names <- .get_renamed_colnames(toupper(header),
+                                      userprovided=list(), checkforsingle=c("P", "A1", "A2", "effect", "SNP"),
+                                      N_provided=FALSE, filename, log.file, warnz=((!linprob) & (!OLS)),
+                                      warn_for_missing = c("P", "A1", "A2", "N"),
+                                      stop_on_missing = stop_on_missing,
+                                      utilfuncs)
+  if (!.prep_required_once(hold_names, c("P", "A1", "A2", "effect", "SNP")) ||
+      ((OLS || linprob) && !N_provided && sum(hold_names == "N") != 1L) ||
+      (!(OLS && is.character(beta)) && sum(hold_names == "SE") != 1L)) {
+    return(.fast_fallback("sumstats_fused", "required columns were not uniquely identified"))
+  }
+
+  if (N_provided) {
+    if(OLS){
+      .LOG("Using user provided N of ", N, " for ", filename, " . Please note that this should reflect the total sample size.",file=log.file)
+    } else {
+      .LOG("Using user provided N of ", N, " for ", filename, " . Please note that this should reflect the sum of effective sample sizes if the linprob argument is being used to back out logistic betas.",file=log.file)
+    }
+  }
+
+  has_info <- "INFO" %in% hold_names
+  col_indices <- .prep_col_indices(hold_names, c("SNP", "A1", "A2", "effect", "P", "N", "INFO", "MAF", "SE"))
+  native_error <- NULL
+  out <- tryCatch(
+    .Call(
+      "genomicssem_sumstats_fused_call",
+      as.character(filename),
+      as.character(ref$SNP),
+      as.integer(.allele_code(ref$A1)),
+      as.integer(.allele_code(ref$A2)),
+      as.numeric(ref$MAF),
+      as.integer(col_indices),
+      as.numeric(if (N_provided) N else NA_real_),
+      as.numeric(info.filter),
+      as.logical(OLS),
+      as.logical(is.character(beta)),
+      as.logical(linprob),
+      as.logical(se.logit),
+      PACKAGE = "GenomicSEM"
+    ),
+    error = function(e) {
+      native_error <<- conditionMessage(e)
+      NULL
+    }
+  )
+  if (is.null(out)) {
+    reason <- if (is.null(native_error)) "native engine returned unsupported input" else native_error
+    return(.fast_fallback("sumstats_fused", reason))
+  }
+
+  out_n <- as.integer(out$n)
+  if (out_n == 0L) {
+    keep <- integer(0)
+    beta_out <- numeric(0)
+    se_out <- numeric(0)
+  } else {
+    rows_out <- seq_len(out_n)
+    keep <- out$keep[rows_out]
+    beta_out <- out$beta[rows_out]
+    se_out <- out$se[rows_out]
+  }
+
+  rows <- out$rows
+  counts <- out$counts
+  .LOG(as.integer(rows[2]), " rows were removed from the ", filename, " summary statistics file due to entries that were duplicated for rsID. These are removed as they likely reflect multiallelic variants.",file=log.file)
+  .LOG("Merging file: ", filename, " with the reference file: ", ref2,file=log.file)
+  .LOG(as.integer(rows[1] - rows[2]), " rows present in the full ", filename, " summary statistics file.",file=log.file)
+  .LOG(as.integer((rows[1] - rows[2]) - rows[3]), " rows were removed from the ", filename, " summary statistics file as the rsIDs for these SNPs were not present in the reference file.",file=log.file)
+
+  if (counts[1] > 0) .LOG(counts[1], "rows were removed from the ", filename, " summary statistics file due to missing values in the P-value column",file=log.file)
+  if (counts[2] > 0) .LOG(counts[2], "rows were removed from the ", filename, " summary statistics file due to missing values in the effect column",file=log.file)
+  if (counts[3] > 0) .LOG(counts[3], " rows were removed from the ", filename, " summary statistics file due to allele frequencies printed as exactly 1 or 0", file=log.file)
+  if (counts[10] > 0) {
+    .LOG("The effect column was determined to be coded as an odds ratio (OR) for the ", filename, " summary statistics file based on the median of the effect column being close to 1. Please ensure the interpretation of this column as an OR is correct.",file=log.file)
+  } else {
+    .LOG("The effect column was determined NOT to be coded as an odds ratio (OR) for the ", filename, " summary statistics file based on the median of the effect column being close to 0.",file=log.file)
+  }
+  if (counts[4] > 0) .LOG(counts[4], "rows were removed from the", filename, "summary statistics file due to effect values estimated at exactly 0 as this causes problems for matrix inversion necessary for later Genomic SEM analyses.",file=log.file)
+
+  if(OLS & is.character(beta)){
+    .LOG("User provided arguments indicate that a GWAS of a continuous trait with already standardized betas is being provided for: ", filename,file=log.file)
+  }
+  if(linprob){
+    .LOG("An transformation used to back out logistic betas for binary traits is being applied for: ", filename,file=log.file)
+  }
+  if(!linprob & !OLS & !se.logit){
+    .LOG("Performing transformation under the assumption that the effect column is either an odds ratio or logistic beta (please see output above to determine whether it was interpreted as an odds ratio) and the SE column is the SE of the odds ratio (i.e., NOT on the logistic scale) for:", filename,file=log.file)
+  }
+  if(se.logit){
+    .LOG("Performing transformation under the assumption that the effect column is either an odds ratio or logistic beta (please see output above to determine whether it was interpreted as an odds ratio) and the SE column is a logistic SE (i.e., NOT the SE of the odds ratio) for:", filename,file=log.file)
+  }
+
+  if (counts[5] > 0) .LOG(counts[5], " row(s) were removed from the" , filename, " summary statistics file due to the effect allele (A1) column not matching A1 or A2 in the reference file.",file=log.file)
+  if (counts[6] > 0) .LOG(counts[6], " row(s) were removed from the ", filename, " summary statistics file due to the other allele (A2) column not matching A1 or A2 in the reference file.",file=log.file)
+  if (counts[7] > 100) .LOG("In excess of 100 SNPs have P val above 1 or below 0. The P column may be mislabled!",file=log.file)
+  if(has_info) {
+    .LOG(counts[8], "rows were removed from the ", filename, " summary statistics file due to INFO values below the designated threshold of ", info.filter,file=log.file)
+  }else{.LOG("No INFO column, cannot filter on INFO, which may influence results",file=log.file)}
+
+  output <- cbind.data.frame(ref$SNP[keep], beta_out, se_out)
+  colnames(output) <- c("SNP", name.beta, name.se)
+  .LOG(nrow(output), " SNPs are left in the summary statistics file ", filename, " after QC and merging with the reference file.",file=log.file)
+
+  if(nrow(output) > 0L && mean(abs(output[,2]/output[,3])) > 5){
+    .LOG('WARNING: The average value of estimate over standard error (i.e., Z) is > 5 for ',trait.name, ". This suggests a column was misinterpreted or arguments were misspecified. Please post on the google group if you are unable to figure out the issue.",file=log.file, print=FALSE)
+    warning(paste0('The average value of estimate over standard error (i.e., Z) is > 5 for ',trait.name, ". This suggests a column was misinterpreted or arguments were misspecified. Please post on the google group if you are unable to figure out the issue."))
+  }
+  output
 }
 
 .sumstats_qc_fast <- function(file, info.filter, OLS, beta, linprob, se.logit) {

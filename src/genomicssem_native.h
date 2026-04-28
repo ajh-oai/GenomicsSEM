@@ -246,6 +246,28 @@ int genomicssem_munge_qc(
     size_t counts_len,
     size_t *out_count);
 
+int genomicssem_munge_fused(
+    const char *filename,
+    const char *output_path,
+    const char **ref_snp,
+    size_t ref_len,
+    const int *ref_a1,
+    size_t ref_a1_len,
+    const int *ref_a2,
+    size_t ref_a2_len,
+    const int *col_indices,
+    size_t col_indices_len,
+    double provided_n,
+    double n_multiplier,
+    double info_filter,
+    double maf_filter,
+    int *out_counts,
+    size_t out_counts_len,
+    size_t *rows_total,
+    size_t *rows_joined,
+    size_t *rows_written,
+    int *unsupported);
+
 int genomicssem_sumstats_qc(
     const int *a1_ref,
     const int *a2_ref,
@@ -273,6 +295,36 @@ int genomicssem_sumstats_qc(
     int *counts,
     size_t counts_len,
     size_t *out_count);
+
+int genomicssem_sumstats_fused(
+    const char *filename,
+    const char **ref_snp,
+    size_t ref_len,
+    const int *ref_a1,
+    size_t ref_a1_len,
+    const int *ref_a2,
+    size_t ref_a2_len,
+    const double *ref_maf,
+    size_t ref_maf_len,
+    const int *col_indices,
+    size_t col_indices_len,
+    double provided_n,
+    double info_filter,
+    int ols,
+    int beta_is_character,
+    int linprob,
+    int se_logit,
+    int *keep,
+    double *beta,
+    double *se,
+    size_t out_len,
+    int *out_counts,
+    size_t out_counts_len,
+    size_t *rows_total,
+    size_t *rows_duplicate_removed,
+    size_t *rows_joined,
+    size_t *rows_written,
+    int *unsupported);
 
 int genomicssem_ldsc_block_products(
     const double *weighted_ld,

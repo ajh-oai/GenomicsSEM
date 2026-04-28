@@ -5,4 +5,5 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+flate2 = "1"
 rayon = "1.10"

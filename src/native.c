@@ -91,6 +91,35 @@ static SEXP protect_int_vector(SEXP x, const char *name, int *nprotect) {
   return x;
 }
 
+static SEXP protect_string_vector(SEXP x, const char *name, int *nprotect) {
+  if (TYPEOF(x) == STRSXP && !Rf_isMatrix(x)) {
+    return x;
+  }
+  ++(*nprotect);
+  SEXP out = PROTECT(Rf_coerceVector(x, STRSXP));
+  if (Rf_isMatrix(out)) {
+    Rf_error("'%s' must be a character vector", name);
+  }
+  return out;
+}
+
+static const char *scalar_string(SEXP x, const char *name) {
+  if (TYPEOF(x) != STRSXP || XLENGTH(x) != 1 || STRING_ELT(x, 0) == NA_STRING) {
+    Rf_error("'%s' must be a non-missing character scalar", name);
+  }
+  return CHAR(STRING_ELT(x, 0));
+}
+
+static const char **string_ptrs(SEXP x) {
+  R_xlen_t n = XLENGTH(x);
+  const char **out = (const char **)R_alloc((size_t)n, sizeof(const char *));
+  for (R_xlen_t i = 0; i < n; ++i) {
+    SEXP value = STRING_ELT(x, i);
+    out[i] = value == NA_STRING ? "" : CHAR(value);
+  }
+  return out;
+}
+
 static int scalar_int(SEXP x, const char *name) {
   int value = Rf_asInteger(x);
   if (value == NA_INTEGER) {
@@ -865,6 +894,85 @@ SEXP genomicssem_munge_qc_call(
   return out;
 }
 
+SEXP genomicssem_munge_fused_call(
+    SEXP filename_,
+    SEXP output_path_,
+    SEXP ref_snp_,
+    SEXP ref_a1_,
+    SEXP ref_a2_,
+    SEXP col_indices_,
+    SEXP provided_n_,
+    SEXP n_multiplier_,
+    SEXP info_filter_,
+    SEXP maf_filter_) {
+  int nprotect = 0;
+  SEXP ref_snp = protect_string_vector(ref_snp_, "ref$SNP", &nprotect);
+  SEXP ref_a1 = protect_int_vector(ref_a1_, "ref$A1", &nprotect);
+  SEXP ref_a2 = protect_int_vector(ref_a2_, "ref$A2", &nprotect);
+  SEXP col_indices = protect_int_vector(col_indices_, "col_indices", &nprotect);
+
+  R_xlen_t ref_len = XLENGTH(ref_snp);
+  if (XLENGTH(ref_a1) != ref_len || XLENGTH(ref_a2) != ref_len) {
+    Rf_error("reference SNP and allele vectors must have the same length");
+  }
+
+  SEXP counts = PROTECT(Rf_allocVector(INTSXP, 8));
+  ++nprotect;
+
+  size_t rows_total = 0;
+  size_t rows_joined = 0;
+  size_t rows_written = 0;
+  int unsupported = 0;
+  int status = genomicssem_munge_fused(
+      scalar_string(filename_, "filename"),
+      scalar_string(output_path_, "output_path"),
+      string_ptrs(ref_snp),
+      (size_t)ref_len,
+      INTEGER(ref_a1),
+      (size_t)XLENGTH(ref_a1),
+      INTEGER(ref_a2),
+      (size_t)XLENGTH(ref_a2),
+      INTEGER(col_indices),
+      (size_t)XLENGTH(col_indices),
+      Rf_asReal(provided_n_),
+      scalar_real(n_multiplier_, "n_multiplier"),
+      scalar_real(info_filter_, "info.filter"),
+      scalar_real(maf_filter_, "maf.filter"),
+      INTEGER(counts),
+      8,
+      &rows_total,
+      &rows_joined,
+      &rows_written,
+      &unsupported);
+
+  check_status(status, "genomicssem_munge_fused");
+  if (unsupported) {
+    UNPROTECT(nprotect);
+    return R_NilValue;
+  }
+
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 4));
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 4));
+  SEXP rows = PROTECT(Rf_allocVector(REALSXP, 3));
+  nprotect += 3;
+
+  REAL(rows)[0] = (double)rows_total;
+  REAL(rows)[1] = (double)rows_joined;
+  REAL(rows)[2] = (double)rows_written;
+  SET_VECTOR_ELT(out, 0, counts);
+  SET_VECTOR_ELT(out, 1, rows);
+  SET_VECTOR_ELT(out, 2, Rf_ScalarInteger((int)rows_written));
+  SET_VECTOR_ELT(out, 3, Rf_ScalarLogical(1));
+  SET_STRING_ELT(names, 0, Rf_mkChar("counts"));
+  SET_STRING_ELT(names, 1, Rf_mkChar("rows"));
+  SET_STRING_ELT(names, 2, Rf_mkChar("n"));
+  SET_STRING_ELT(names, 3, Rf_mkChar("used"));
+  Rf_setAttrib(out, R_NamesSymbol, names);
+
+  UNPROTECT(nprotect);
+  return out;
+}
+
 SEXP genomicssem_sumstats_qc_call(
     SEXP a1_ref_,
     SEXP a2_ref_,
@@ -960,6 +1068,108 @@ SEXP genomicssem_sumstats_qc_call(
   SET_STRING_ELT(names, 2, Rf_mkChar("se"));
   SET_STRING_ELT(names, 3, Rf_mkChar("counts"));
   SET_STRING_ELT(names, 4, Rf_mkChar("n"));
+  Rf_setAttrib(out, R_NamesSymbol, names);
+
+  UNPROTECT(nprotect);
+  return out;
+}
+
+SEXP genomicssem_sumstats_fused_call(
+    SEXP filename_,
+    SEXP ref_snp_,
+    SEXP ref_a1_,
+    SEXP ref_a2_,
+    SEXP ref_maf_,
+    SEXP col_indices_,
+    SEXP provided_n_,
+    SEXP info_filter_,
+    SEXP ols_,
+    SEXP beta_is_character_,
+    SEXP linprob_,
+    SEXP se_logit_) {
+  int nprotect = 0;
+  SEXP ref_snp = protect_string_vector(ref_snp_, "ref$SNP", &nprotect);
+  SEXP ref_a1 = protect_int_vector(ref_a1_, "ref$A1", &nprotect);
+  SEXP ref_a2 = protect_int_vector(ref_a2_, "ref$A2", &nprotect);
+  SEXP ref_maf = protect_real_vector(ref_maf_, "ref$MAF", &nprotect);
+  SEXP col_indices = protect_int_vector(col_indices_, "col_indices", &nprotect);
+
+  R_xlen_t ref_len = XLENGTH(ref_snp);
+  if (XLENGTH(ref_a1) != ref_len || XLENGTH(ref_a2) != ref_len || XLENGTH(ref_maf) != ref_len) {
+    Rf_error("reference SNP, allele, and MAF vectors must have the same length");
+  }
+
+  SEXP keep = PROTECT(Rf_allocVector(INTSXP, ref_len));
+  SEXP beta = PROTECT(Rf_allocVector(REALSXP, ref_len));
+  SEXP se = PROTECT(Rf_allocVector(REALSXP, ref_len));
+  SEXP counts = PROTECT(Rf_allocVector(INTSXP, 10));
+  nprotect += 4;
+
+  size_t rows_total = 0;
+  size_t rows_duplicate_removed = 0;
+  size_t rows_joined = 0;
+  size_t rows_written = 0;
+  int unsupported = 0;
+  int status = genomicssem_sumstats_fused(
+      scalar_string(filename_, "filename"),
+      string_ptrs(ref_snp),
+      (size_t)ref_len,
+      INTEGER(ref_a1),
+      (size_t)XLENGTH(ref_a1),
+      INTEGER(ref_a2),
+      (size_t)XLENGTH(ref_a2),
+      REAL(ref_maf),
+      (size_t)XLENGTH(ref_maf),
+      INTEGER(col_indices),
+      (size_t)XLENGTH(col_indices),
+      Rf_asReal(provided_n_),
+      scalar_real(info_filter_, "info.filter"),
+      scalar_logical(ols_, "OLS"),
+      scalar_logical(beta_is_character_, "beta_is_character"),
+      scalar_logical(linprob_, "linprob"),
+      scalar_logical(se_logit_, "se.logit"),
+      INTEGER(keep),
+      REAL(beta),
+      REAL(se),
+      (size_t)ref_len,
+      INTEGER(counts),
+      10,
+      &rows_total,
+      &rows_duplicate_removed,
+      &rows_joined,
+      &rows_written,
+      &unsupported);
+
+  check_status(status, "genomicssem_sumstats_fused");
+  if (unsupported) {
+    UNPROTECT(nprotect);
+    return R_NilValue;
+  }
+
+  SEXP out_count = PROTECT(Rf_ScalarInteger((int)rows_written));
+  SEXP rows = PROTECT(Rf_allocVector(REALSXP, 4));
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 7));
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 7));
+  nprotect += 4;
+
+  REAL(rows)[0] = (double)rows_total;
+  REAL(rows)[1] = (double)rows_duplicate_removed;
+  REAL(rows)[2] = (double)rows_joined;
+  REAL(rows)[3] = (double)rows_written;
+  SET_VECTOR_ELT(out, 0, keep);
+  SET_VECTOR_ELT(out, 1, beta);
+  SET_VECTOR_ELT(out, 2, se);
+  SET_VECTOR_ELT(out, 3, counts);
+  SET_VECTOR_ELT(out, 4, out_count);
+  SET_VECTOR_ELT(out, 5, rows);
+  SET_VECTOR_ELT(out, 6, Rf_ScalarLogical(1));
+  SET_STRING_ELT(names, 0, Rf_mkChar("keep"));
+  SET_STRING_ELT(names, 1, Rf_mkChar("beta"));
+  SET_STRING_ELT(names, 2, Rf_mkChar("se"));
+  SET_STRING_ELT(names, 3, Rf_mkChar("counts"));
+  SET_STRING_ELT(names, 4, Rf_mkChar("n"));
+  SET_STRING_ELT(names, 5, Rf_mkChar("rows"));
+  SET_STRING_ELT(names, 6, Rf_mkChar("used"));
   Rf_setAttrib(out, R_NamesSymbol, names);
 
   UNPROTECT(nprotect);

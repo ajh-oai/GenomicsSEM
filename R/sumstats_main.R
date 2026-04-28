@@ -1,10 +1,5 @@
 .sumstats_main <- function(X, utilfuncs, filename, trait.name, N, keep.indel, OLS, beta, info.filter, linprob,
                            se.logit, name.beta, name.se, ref, ref2, file=NULL, log.file=NULL,direct.filter) {
-  if (!is.null(file)) {
-    file <- data.frame(file)
-  } else{
-    file <- data.frame(.read_sumstats_table(filename, p_as_character = TRUE))
-  }
   if (!is.null(utilfuncs)) {
     for (j in names(utilfuncs)) {
       assign(j, utilfuncs[[j]], envir=environment())
@@ -17,7 +12,19 @@
   } else {
     .LOG("\n\n",file=log.file, print=FALSE)
   }
-  
+
+  if (is.null(file)) {
+    fused <- .sumstats_fused_fast(filename, trait.name, N, keep.indel, OLS, beta, info.filter,
+                                  linprob, se.logit, name.beta, name.se, ref, ref2,
+                                  log.file, direct.filter, utilfuncs)
+    if (!is.null(fused)) {
+      return(fused)
+    }
+    file <- data.frame(.read_sumstats_table(filename, p_as_character = TRUE))
+  } else{
+    file <- data.frame(file)
+  }
+
   .LOG("Preparing summary statistics for file: ", filename,file=log.file)
   N_provided <- (!is.na(N))
   if (linprob){

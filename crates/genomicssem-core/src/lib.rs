@@ -32,6 +32,12 @@ pub const COMMONFACTOR_BATCH_OUT_COLS: usize = 7;
 pub const MUNGE_QC_COUNT_LEN: usize = 8;
 pub const SUMSTATS_QC_COUNT_LEN: usize = 10;
 
+mod prep;
+pub use prep::{
+    munge_fused, sumstats_fused, MungeFusedReport, SumstatsFusedOutput, SumstatsFusedReport,
+    MUNGE_FUSED_COLS, SUMSTATS_FUSED_COLS,
+};
+
 #[inline]
 fn idx(row: usize, col: usize, nrow: usize) -> usize {
     row + col * nrow

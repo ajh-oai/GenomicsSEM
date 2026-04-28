@@ -8,6 +8,8 @@ genomicssem_ns <- asNamespace("GenomicSEM")
 .ldsc_read_m_files <- get(".ldsc_read_m_files", envir = genomicssem_ns)
 .ldsc_read_file_list <- get(".ldsc_read_file_list", envir = genomicssem_ns)
 .ldsc_read_m_file_list <- get(".ldsc_read_m_file_list", envir = genomicssem_ns)
+.munge_fused_fast <- get(".munge_fused_fast", envir = genomicssem_ns)
+.sumstats_fused_fast <- get(".sumstats_fused_fast", envir = genomicssem_ns)
 
 with_temp_cwd <- function(code) {
   old <- getwd()
@@ -110,13 +112,16 @@ check_sumstats_fast_reader <- function() {
     old_read <- getOption("GenomicSEM.fast_table_read")
     old_join <- getOption("GenomicSEM.fast_snp_join")
     old_sumstats_qc <- getOption("GenomicSEM.fast_sumstats_qc")
+    old_sumstats_engine <- getOption("GenomicSEM.fast_sumstats_engine")
     on.exit(options(
       GenomicSEM.fast_table_read = old_read,
       GenomicSEM.fast_snp_join = old_join,
-      GenomicSEM.fast_sumstats_qc = old_sumstats_qc
+      GenomicSEM.fast_sumstats_qc = old_sumstats_qc,
+      GenomicSEM.fast_sumstats_engine = old_sumstats_engine
     ), add = TRUE)
 
-    options(GenomicSEM.fast_table_read = FALSE, GenomicSEM.fast_snp_join = FALSE, GenomicSEM.fast_sumstats_qc = FALSE)
+    options(GenomicSEM.fast_table_read = FALSE, GenomicSEM.fast_snp_join = FALSE,
+            GenomicSEM.fast_sumstats_qc = FALSE, GenomicSEM.fast_sumstats_engine = FALSE)
     fallback <- suppressWarnings(sumstats(
       files = "trait.txt",
       ref = "ref.txt",
@@ -125,7 +130,8 @@ check_sumstats_fast_reader <- function() {
       parallel = FALSE
     ))
 
-    options(GenomicSEM.fast_table_read = TRUE, GenomicSEM.fast_snp_join = TRUE, GenomicSEM.fast_sumstats_qc = TRUE)
+    options(GenomicSEM.fast_table_read = TRUE, GenomicSEM.fast_snp_join = TRUE,
+            GenomicSEM.fast_sumstats_qc = TRUE, GenomicSEM.fast_sumstats_engine = TRUE)
     fast <- suppressWarnings(sumstats(
       files = "trait.txt",
       ref = "ref.txt",
@@ -140,6 +146,57 @@ check_sumstats_fast_reader <- function() {
   })
 }
 
+check_sumstats_fused_engine <- function() {
+  with_temp_cwd({
+    ref <- make_ref()
+    ss <- make_sumstats()
+    write.table(ref, "ref.txt", row.names = FALSE, quote = FALSE)
+    write.table(ss, gzfile("trait.txt.gz"), row.names = FALSE, quote = FALSE)
+
+    old <- options(
+      GenomicSEM.fast_table_read = FALSE,
+      GenomicSEM.fast_snp_join = FALSE,
+      GenomicSEM.fast_sumstats_qc = FALSE,
+      GenomicSEM.fast_sumstats_engine = FALSE
+    )
+    on.exit(options(old), add = TRUE)
+
+    fallback <- suppressWarnings(sumstats(
+      files = "trait.txt.gz",
+      ref = "ref.txt",
+      trait.names = "trait",
+      se.logit = TRUE,
+      parallel = FALSE
+    ))
+
+    options(GenomicSEM.fast_sumstats_engine = TRUE)
+    log.file <- file("sumstats_fused.log", open = "wt")
+    fused <- .sumstats_fused_fast(
+      filename = "trait.txt.gz",
+      trait.name = "trait",
+      N = NA_real_,
+      keep.indel = FALSE,
+      OLS = FALSE,
+      beta = FALSE,
+      info.filter = 0.6,
+      linprob = FALSE,
+      se.logit = TRUE,
+      name.beta = "beta.trait",
+      name.se = "se.trait",
+      ref = ref,
+      ref2 = "ref.txt",
+      log.file = log.file,
+      direct.filter = FALSE
+    )
+    close(log.file)
+
+    stopifnot(!is.null(fused))
+    stopifnot(identical(fallback$SNP, fused$SNP))
+    stopifnot(max(abs(fallback$beta.trait - fused$beta.trait), na.rm = TRUE) < 1e-12)
+    stopifnot(max(abs(fallback$se.trait - fused$se.trait), na.rm = TRUE) < 1e-12)
+  })
+}
+
 check_munge_fast_reader <- function() {
   with_temp_cwd({
     ref <- make_ref()
@@ -150,13 +207,16 @@ check_munge_fast_reader <- function() {
     old_read <- getOption("GenomicSEM.fast_table_read")
     old_join <- getOption("GenomicSEM.fast_snp_join")
     old_munge_qc <- getOption("GenomicSEM.fast_munge_qc")
+    old_munge_engine <- getOption("GenomicSEM.fast_munge_engine")
     on.exit(options(
       GenomicSEM.fast_table_read = old_read,
       GenomicSEM.fast_snp_join = old_join,
-      GenomicSEM.fast_munge_qc = old_munge_qc
+      GenomicSEM.fast_munge_qc = old_munge_qc,
+      GenomicSEM.fast_munge_engine = old_munge_engine
     ), add = TRUE)
 
-    options(GenomicSEM.fast_table_read = FALSE, GenomicSEM.fast_snp_join = FALSE, GenomicSEM.fast_munge_qc = FALSE)
+    options(GenomicSEM.fast_table_read = FALSE, GenomicSEM.fast_snp_join = FALSE,
+            GenomicSEM.fast_munge_qc = FALSE, GenomicSEM.fast_munge_engine = FALSE)
     suppressWarnings(munge(
       files = "trait.txt",
       hm3 = "hm3.txt",
@@ -167,7 +227,8 @@ check_munge_fast_reader <- function() {
     ))
     fallback <- read.table(gzfile("trait_slow.sumstats.gz"), header = TRUE)
 
-    options(GenomicSEM.fast_table_read = TRUE, GenomicSEM.fast_snp_join = TRUE, GenomicSEM.fast_munge_qc = TRUE)
+    options(GenomicSEM.fast_table_read = TRUE, GenomicSEM.fast_snp_join = TRUE,
+            GenomicSEM.fast_munge_qc = TRUE, GenomicSEM.fast_munge_engine = TRUE)
     suppressWarnings(munge(
       files = "trait.txt",
       hm3 = "hm3.txt",
@@ -183,6 +244,58 @@ check_munge_fast_reader <- function() {
     stopifnot(identical(fallback$A1, fast$A1))
     stopifnot(identical(fallback$A2, fast$A2))
     stopifnot(max(abs(fallback$Z - fast$Z), na.rm = TRUE) < 1e-5)
+  })
+}
+
+check_munge_fused_engine <- function() {
+  with_temp_cwd({
+    ref <- make_ref()
+    ss <- make_sumstats()
+    hm3 <- ref[, c("SNP", "A1", "A2")]
+    write.table(hm3, "hm3.txt", row.names = FALSE, quote = FALSE)
+    write.table(ss, gzfile("trait.txt.gz"), row.names = FALSE, quote = FALSE)
+
+    old <- options(
+      GenomicSEM.fast_table_read = FALSE,
+      GenomicSEM.fast_snp_join = FALSE,
+      GenomicSEM.fast_munge_qc = FALSE,
+      GenomicSEM.fast_munge_engine = FALSE
+    )
+    on.exit(options(old), add = TRUE)
+
+    suppressWarnings(munge(
+      files = "trait.txt.gz",
+      hm3 = "hm3.txt",
+      trait.names = "trait_slow",
+      parallel = FALSE,
+      overwrite = TRUE,
+      column.names = list(effect = "BETA")
+    ))
+    fallback <- read.table(gzfile("trait_slow.sumstats.gz"), header = TRUE)
+
+    options(GenomicSEM.fast_munge_engine = TRUE)
+    log.file <- file("munge_fused.log", open = "wt")
+    fused_result <- .munge_fused_fast(
+      filename = "trait.txt.gz",
+      trait.name = "trait_fused",
+      N = NA_real_,
+      ref = hm3,
+      hm3 = "hm3.txt",
+      info.filter = 0.9,
+      maf.filter = 0.01,
+      column.names = list(effect = "BETA"),
+      overwrite = TRUE,
+      log.file = log.file
+    )
+    close(log.file)
+
+    stopifnot(!is.null(fused_result))
+    fused <- read.table(gzfile("trait_fused.sumstats.gz"), header = TRUE)
+    stopifnot(identical(fallback$SNP, fused$SNP))
+    stopifnot(identical(fallback$N, fused$N))
+    stopifnot(identical(fallback$A1, fused$A1))
+    stopifnot(identical(fallback$A2, fused$A2))
+    stopifnot(max(abs(fallback$Z - fused$Z), na.rm = TRUE) < 1e-5)
   })
 }
 
@@ -289,7 +402,9 @@ check_ldsc_full_fast_reader <- function() {
 check_block_products()
 check_reader_preserves_p_character()
 check_sumstats_fast_reader()
+check_sumstats_fused_engine()
 check_munge_fast_reader()
+check_munge_fused_engine()
 check_ldsc_fast_reader()
 check_ldsc_full_fast_reader()
 

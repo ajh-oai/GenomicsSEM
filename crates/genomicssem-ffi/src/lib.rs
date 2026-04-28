@@ -3,9 +3,11 @@
 use genomicssem_core::{
     fill_s_full, fill_v_full, fill_v_snp, fill_v_snp_batch, fill_z_pre, fit_commonfactor_batch,
     fit_commonfactor_main, fit_commonfactor_q, fit_generic_sem, fit_generic_sem_batch,
-    ldsc_block_products, munge_qc, sumstats_qc, GenomicControl, KernelError, MungeQcOutput,
-    SumstatsQcOutput,
+    ldsc_block_products, munge_fused, munge_qc, sumstats_fused, sumstats_qc, GenomicControl,
+    KernelError, MungeQcOutput, SumstatsFusedOutput, SumstatsQcOutput,
 };
+use std::ffi::CStr;
+use std::os::raw::c_char;
 use std::slice;
 
 const OK: i32 = 0;
@@ -39,6 +41,31 @@ unsafe fn checked_slice_mut<'a, T>(ptr: *mut T, len: usize) -> Result<&'a mut [T
         return Err(KernelError::NullPointer);
     }
     Ok(slice::from_raw_parts_mut(ptr, len))
+}
+
+unsafe fn checked_cstr<'a>(ptr: *const c_char) -> Result<&'a str, KernelError> {
+    if ptr.is_null() {
+        return Err(KernelError::NullPointer);
+    }
+    CStr::from_ptr(ptr)
+        .to_str()
+        .map_err(|_| KernelError::BadDimensions)
+}
+
+unsafe fn checked_cstrs<'a>(
+    ptr: *const *const c_char,
+    len: usize,
+) -> Result<Vec<&'a str>, KernelError> {
+    if ptr.is_null() && len != 0 {
+        return Err(KernelError::NullPointer);
+    }
+
+    let raw = slice::from_raw_parts(ptr, len);
+    let mut out = Vec::with_capacity(len);
+    for item in raw {
+        out.push(checked_cstr(*item)?);
+    }
+    Ok(out)
 }
 
 #[no_mangle]
@@ -665,6 +692,72 @@ pub unsafe extern "C" fn genomicssem_munge_qc(
 }
 
 #[no_mangle]
+pub unsafe extern "C" fn genomicssem_munge_fused(
+    filename: *const c_char,
+    output_path: *const c_char,
+    ref_snp: *const *const c_char,
+    ref_len: usize,
+    ref_a1: *const i32,
+    ref_a1_len: usize,
+    ref_a2: *const i32,
+    ref_a2_len: usize,
+    col_indices: *const i32,
+    col_indices_len: usize,
+    provided_n: f64,
+    n_multiplier: f64,
+    info_filter: f64,
+    maf_filter: f64,
+    out_counts: *mut i32,
+    out_counts_len: usize,
+    rows_total: *mut usize,
+    rows_joined: *mut usize,
+    rows_written: *mut usize,
+    unsupported: *mut i32,
+) -> i32 {
+    let result = (|| {
+        if rows_total.is_null()
+            || rows_joined.is_null()
+            || rows_written.is_null()
+            || unsupported.is_null()
+        {
+            return Err(KernelError::NullPointer);
+        }
+        let filename = checked_cstr(filename)?;
+        let output_path = checked_cstr(output_path)?;
+        let ref_snp = checked_cstrs(ref_snp, ref_len)?;
+        let ref_a1 = checked_slice(ref_a1, ref_a1_len)?;
+        let ref_a2 = checked_slice(ref_a2, ref_a2_len)?;
+        let col_indices = checked_slice(col_indices, col_indices_len)?;
+        let out_counts = checked_slice_mut(out_counts, out_counts_len)?;
+        if out_counts_len < genomicssem_core::MUNGE_QC_COUNT_LEN {
+            return Err(KernelError::BadDimensions);
+        }
+
+        let report = munge_fused(
+            filename,
+            output_path,
+            &ref_snp,
+            ref_a1,
+            ref_a2,
+            col_indices,
+            provided_n.is_finite().then_some(provided_n),
+            n_multiplier,
+            info_filter,
+            maf_filter,
+        )?;
+
+        out_counts[..genomicssem_core::MUNGE_QC_COUNT_LEN].copy_from_slice(&report.counts);
+        *rows_total = report.rows_total;
+        *rows_joined = report.rows_joined;
+        *rows_written = report.rows_written;
+        *unsupported = i32::from(report.unsupported);
+        Ok(())
+    })();
+
+    result.map(|()| OK).unwrap_or_else(code)
+}
+
+#[no_mangle]
 pub unsafe extern "C" fn genomicssem_sumstats_qc(
     a1_ref: *const i32,
     a2_ref: *const i32,
@@ -746,6 +839,88 @@ pub unsafe extern "C" fn genomicssem_sumstats_qc(
             se_logit != 0,
             &mut out,
         )?;
+        Ok(())
+    })();
+
+    result.map(|()| OK).unwrap_or_else(code)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn genomicssem_sumstats_fused(
+    filename: *const c_char,
+    ref_snp: *const *const c_char,
+    ref_len: usize,
+    ref_a1: *const i32,
+    ref_a1_len: usize,
+    ref_a2: *const i32,
+    ref_a2_len: usize,
+    ref_maf: *const f64,
+    ref_maf_len: usize,
+    col_indices: *const i32,
+    col_indices_len: usize,
+    provided_n: f64,
+    info_filter: f64,
+    ols: i32,
+    beta_is_character: i32,
+    linprob: i32,
+    se_logit: i32,
+    keep: *mut i32,
+    beta: *mut f64,
+    se: *mut f64,
+    out_len: usize,
+    out_counts: *mut i32,
+    out_counts_len: usize,
+    rows_total: *mut usize,
+    rows_duplicate_removed: *mut usize,
+    rows_joined: *mut usize,
+    rows_written: *mut usize,
+    unsupported: *mut i32,
+) -> i32 {
+    let result = (|| {
+        if rows_total.is_null()
+            || rows_duplicate_removed.is_null()
+            || rows_joined.is_null()
+            || rows_written.is_null()
+            || unsupported.is_null()
+        {
+            return Err(KernelError::NullPointer);
+        }
+        let filename = checked_cstr(filename)?;
+        let ref_snp = checked_cstrs(ref_snp, ref_len)?;
+        let ref_a1 = checked_slice(ref_a1, ref_a1_len)?;
+        let ref_a2 = checked_slice(ref_a2, ref_a2_len)?;
+        let ref_maf = checked_slice(ref_maf, ref_maf_len)?;
+        let col_indices = checked_slice(col_indices, col_indices_len)?;
+        let keep = checked_slice_mut(keep, out_len)?;
+        let beta = checked_slice_mut(beta, out_len)?;
+        let se = checked_slice_mut(se, out_len)?;
+        let out_counts = checked_slice_mut(out_counts, out_counts_len)?;
+        if out_counts_len < genomicssem_core::SUMSTATS_QC_COUNT_LEN {
+            return Err(KernelError::BadDimensions);
+        }
+
+        let report = sumstats_fused(
+            filename,
+            &ref_snp,
+            ref_a1,
+            ref_a2,
+            ref_maf,
+            col_indices,
+            provided_n.is_finite().then_some(provided_n),
+            info_filter,
+            ols != 0,
+            beta_is_character != 0,
+            linprob != 0,
+            se_logit != 0,
+            &mut SumstatsFusedOutput { keep, beta, se },
+        )?;
+
+        out_counts[..genomicssem_core::SUMSTATS_QC_COUNT_LEN].copy_from_slice(&report.counts);
+        *rows_total = report.rows_total;
+        *rows_duplicate_removed = report.rows_duplicate_removed;
+        *rows_joined = report.rows_joined;
+        *rows_written = report.rows_written;
+        *unsupported = i32::from(report.unsupported);
         Ok(())
     })();
 

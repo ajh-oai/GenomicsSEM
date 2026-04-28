@@ -116,6 +116,17 @@ extern SEXP genomicssem_munge_qc_call(
     SEXP maf_,
     SEXP info_filter_,
     SEXP maf_filter_);
+extern SEXP genomicssem_munge_fused_call(
+    SEXP filename_,
+    SEXP output_path_,
+    SEXP ref_snp_,
+    SEXP ref_a1_,
+    SEXP ref_a2_,
+    SEXP col_indices_,
+    SEXP provided_n_,
+    SEXP n_multiplier_,
+    SEXP info_filter_,
+    SEXP maf_filter_);
 extern SEXP genomicssem_sumstats_qc_call(
     SEXP a1_ref_,
     SEXP a2_ref_,
@@ -128,6 +139,19 @@ extern SEXP genomicssem_sumstats_qc_call(
     SEXP maf_ref_,
     SEXP maf_file_,
     SEXP info_,
+    SEXP info_filter_,
+    SEXP ols_,
+    SEXP beta_is_character_,
+    SEXP linprob_,
+    SEXP se_logit_);
+extern SEXP genomicssem_sumstats_fused_call(
+    SEXP filename_,
+    SEXP ref_snp_,
+    SEXP ref_a1_,
+    SEXP ref_a2_,
+    SEXP ref_maf_,
+    SEXP col_indices_,
+    SEXP provided_n_,
     SEXP info_filter_,
     SEXP ols_,
     SEXP beta_is_character_,
@@ -151,7 +175,9 @@ static const R_CallMethodDef CallEntries[] = {
     {"genomicssem_fit_generic_sem_call", (DL_FUNC)&genomicssem_fit_generic_sem_call, 12},
     {"genomicssem_fit_generic_sem_batch_call", (DL_FUNC)&genomicssem_fit_generic_sem_batch_call, 23},
     {"genomicssem_munge_qc_call", (DL_FUNC)&genomicssem_munge_qc_call, 10},
+    {"genomicssem_munge_fused_call", (DL_FUNC)&genomicssem_munge_fused_call, 10},
     {"genomicssem_sumstats_qc_call", (DL_FUNC)&genomicssem_sumstats_qc_call, 16},
+    {"genomicssem_sumstats_fused_call", (DL_FUNC)&genomicssem_sumstats_fused_call, 12},
     {"genomicssem_ldsc_block_products_call", (DL_FUNC)&genomicssem_ldsc_block_products_call, 4},
     {NULL, NULL, 0}
 };
