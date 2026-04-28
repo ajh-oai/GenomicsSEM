@@ -1141,3 +1141,68 @@ Speedups and notes:
 - On the 100-SNP old-vs-new lavaan comparison, Rust-backed `userGWAS(sub="F1~SNP")` improved `2.462s -> 0.082s` on one core (`30.0x`) and `0.556s -> 0.087s` at 16 cores (`6.4x`), with max absolute numeric difference `7.8e-06`.
 - The full Rust-backed 1M SNP p-factor scan completed in `36.090s` at one thread and `4.527s` at 16 threads (`8.0x` scaling from 1 to 16).
 - Full old-lavaan 1M was not run in this local pass; `--old-gwas-snps=100` keeps the equivalence check bounded while the full 1M path is measured for the new implementation.
+
+## 2026-04-28 12:23 PDT - Public practical p-factor 1M on panda 16-CPU pod
+
+Change since local pass:
+
+- Hardened the Rust SEM compiler for the older lavaan 0.6-17 parameter tables on the remote Ubuntu R stack:
+  - inequality constraints represented as rows such as `theta > 0.001`;
+  - lavaan `da` rows that should be ignored for model compilation;
+  - factor-valued parameter table cells that must be converted through character before numeric parsing.
+- Updated `repro/pfactor_practical_1m.R` so `--reuse-subset` can run from a staged public subset without requiring remote access to the raw Figshare/Box files.
+
+Remote context:
+
+- brix workload: `ajh/genomicssem-1m-cpu16`
+- pod: `genomicssem-1m-cpu16-0`
+- cluster/quota: panda, flex
+- requested size: 16 CPU
+- node: `panda-cpu-e1883`
+- CPU constraint observed on pod: `Cpus_allowed_list: 58-73`, `cpu.max: 1600000 100000`
+- R stack: Ubuntu R 4.3.3 with lavaan 0.6-17
+- Data staging: copied local `GenomicSEMPractical.RData` and `subset_1000000/` to the pod because outbound HTTPS from the pod failed for CRAN, Figshare, and UT Box with SSL connect errors. The remote run recomputed old and new `sumstats()` from the staged public subset.
+
+Validation:
+
+```sh
+R CMD INSTALL --install-tests .
+Rscript tests/usergwas-fast-fit.R
+Rscript tests/fast-path-release.R
+cargo test --workspace
+```
+
+Benchmark command:
+
+```sh
+Rscript repro/pfactor_practical_1m.R \
+  --target-snps 1000000 \
+  --old-gwas-snps 100 \
+  --cores 1,4,16 \
+  --threads 16 \
+  --skip-download \
+  --reuse-subset
+```
+
+Remote results:
+
+| stage | backend | cores | n_snp | elapsed_sec | max_abs_diff_vs_old | equivalent |
+|---|---|---:|---:|---:|---:|---|
+| public_pfactor_sumstats | old_r | 1 | 1291369 | 40.821 | 0 | TRUE |
+| public_pfactor_sumstats | new_rust | 1 | 1291369 | 9.816 | 1.387779e-17 | TRUE |
+| public_pfactor_userGWAS_compare | old_r_lavaan | 1 | 100 | 12.233 | 0 | TRUE |
+| public_pfactor_userGWAS_compare | new_rust_binding | 1 | 100 | 2.240 | 1.778457e-06 | TRUE |
+| public_pfactor_userGWAS_full | new_rust_binding | 1 | 1000000 | 81.752 | NA | NA |
+| public_pfactor_userGWAS_compare | old_r_lavaan | 4 | 100 | 5.468 | 0 | TRUE |
+| public_pfactor_userGWAS_compare | new_rust_binding | 4 | 100 | 2.181 | 1.778457e-06 | TRUE |
+| public_pfactor_userGWAS_full | new_rust_binding | 4 | 1000000 | 23.500 | NA | NA |
+| public_pfactor_userGWAS_compare | old_r_lavaan | 16 | 100 | 4.367 | 0 | TRUE |
+| public_pfactor_userGWAS_compare | new_rust_binding | 16 | 100 | 2.215 | 1.778457e-06 | TRUE |
+| public_pfactor_userGWAS_full | new_rust_binding | 16 | 1000000 | 12.380 | NA | NA |
+
+Speedups and notes:
+
+- Remote `sumstats()` improved `40.821s -> 9.816s` (`4.2x`) on 1,291,369 aligned public SNPs with byte-level-equivalent checked numeric columns.
+- Remote old-vs-new `userGWAS()` equivalence on the 100-SNP window improved `12.233s -> 2.240s` on one core (`5.5x`) and `4.367s -> 2.215s` at 16 cores (`2.0x`) with max absolute numeric difference `1.8e-06`.
+- The full Rust-backed 1M scan completed in `81.752s` at one thread, `23.500s` at four threads, and `12.380s` at 16 threads (`6.6x` scaling from one to 16 threads).
+- Full old-lavaan 1M was again intentionally not run. On this pod, the 16-core old-lavaan 100-SNP measurement alone implies a rough linear 1M estimate on the order of 12 hours, so the bounded equivalence window is the practical old-vs-new check.
