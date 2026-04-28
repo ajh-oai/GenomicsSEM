@@ -984,3 +984,10 @@ Interpretation:
 - Against old R ingestion/QC, the fused path improves `sumstats()` `1.322s -> 0.139s` (`9.5x`) and `munge()` `1.901s -> 0.433s` (`4.4x`) on 100k SNP / 2 traits.
 - Against the previous fast read + Rust QC mode, the fused path improves `sumstats()` `0.189s -> 0.139s` (`1.4x`) and `munge()` `0.939s -> 0.433s` (`2.2x`).
 - The current engine intentionally falls back for unsupported prep features such as `sumstats(direct.filter=TRUE)` and `keep.indel=TRUE`; the critical supported path is whitespace/gzip GWAS files with uniquely identified SNP, allele, effect, P, and required N/SE columns.
+
+Remote follow-up:
+
+- Tried to rerun this benchmark on a 16-CPU panda/flex brix pod as `ajh/genomicssem-bench`.
+- The first workload reconciled the GenomicSEM commit but failed pod initialization because the default brix initializer pointed at `/root/code/openai/personal/ajh/brix/setup.sh` while the workload only mounted the GenomicSEM repo.
+- Retrying with both `openai` and `GenomicSEM` repos was blocked by the brix git server's 50 MB file limit for unrelated large files in the local `openai` repo history.
+- The failed workload was deleted. No new remote benchmark numbers were produced in this attempt.
