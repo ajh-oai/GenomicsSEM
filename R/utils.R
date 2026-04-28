@@ -1493,11 +1493,13 @@ Please note that this is likely effective sample size cut in half. The function 
     row_keys <- paste0(ptable$lhs, ptable$op, ptable$rhs, sep = "")
     snp_cols <- if(TWAS) c("Gene","Panel","HSQ") else c("SNP", "CHR", "BP", "MAF", "A1", "A2")
     warn_names <- if(printwarn) c("error","warning") else character()
+    snp_meta <- as.data.frame(SNPs[, seq_along(snp_cols), drop = FALSE])
+    colnames(snp_meta) <- snp_cols
 
     make_empty_sub <- function(q_snp_cols) {
       out <- as.data.frame(matrix(NA, nrow = f, ncol = length(c(snp_cols, q_snp_cols, warn_names))))
       colnames(out) <- c(snp_cols, q_snp_cols, warn_names)
-      out[snp_cols] <- SNPs[, snp_cols, drop = FALSE]
+      out[snp_cols] <- snp_meta
       if(printwarn){
         out$error <- 0
         out$warning <- 0
@@ -1523,8 +1525,7 @@ Please note that this is likely effective sample size cut in half. The function 
       p <- 2 * pnorm(abs(z), lower.tail = FALSE)
       chisq <- batch_fit$chisq
 
-      out <- as.data.frame(SNPs[, snp_cols, drop = FALSE])
-      colnames(out) <- snp_cols
+      out <- snp_meta
       out$lhs <- rep(ptable$lhs[row_idx], f)
       out$op <- rep(ptable$op[row_idx], f)
       out$rhs <- rep(ptable$rhs[row_idx], f)
