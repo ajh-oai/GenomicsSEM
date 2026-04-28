@@ -942,3 +942,45 @@ Interpretation:
 - On the remote 16-CPU pod, combined fast read + Rust QC improves `sumstats()` `5.559s -> 1.210s` (`4.6x`) and `munge()` `7.416s -> 3.498s` (`2.1x`) for the 200k-SNP/2-trait synthetic prep benchmark.
 - The `fread()` LDSC reader path improves `ldsc_read` `0.647s -> 0.315s` (`2.1x`) and `s_ldsc_read` `0.410s -> 0.197s` (`2.1x`).
 - The native LDSC block path scales cleanly through 16 Rust worker threads on the wider block benchmark: R helper `1.539s`, Rust R binding `0.108s` at 16 threads (`14.3x` faster than the direct R helper, `18.6x` faster than the explicit old loop).
+
+## 2026-04-27 17:19 PDT - Local Rust streaming prep engine smoke benchmark
+
+Change:
+
+- Added native Rust streaming prep engines for supported `munge()` and `sumstats()` inputs.
+- The engines read plain or gzip whitespace-delimited GWAS files in Rust, use R-provided reference vectors, fuse SNP lookup + duplicate/drop bookkeeping + native QC, and return to the existing R output/logging surface.
+- New options: `GenomicSEM.fast_munge_engine` and `GenomicSEM.fast_sumstats_engine`.
+
+Validation:
+
+```sh
+cargo test --workspace
+R CMD INSTALL --install-tests .
+Rscript tests/prep-fast-path.R
+Rscript tests/rust-kernel-parity.R
+Rscript benches/bench_prep_fast_paths.R 100000 2 20 200 3
+```
+
+Local prep benchmark summary:
+
+| workflow | fast_table_read | fast_prep_qc | fast_snp_join | fast_prep_engine | n_snp | elapsed_sec | checksum |
+|---|---|---|---|---|---:|---:|---:|
+| sumstats | FALSE | FALSE | FALSE | FALSE | 100000 | 1.322 | 31058.26 |
+| munge | FALSE | FALSE | FALSE | FALSE | 100000 | 1.901 | 2000499000 |
+| sumstats | TRUE | FALSE | FALSE | FALSE | 100000 | 0.550 | 31058.26 |
+| munge | TRUE | FALSE | FALSE | FALSE | 100000 | 1.321 | 2000499000 |
+| sumstats | FALSE | TRUE | FALSE | FALSE | 100000 | 0.972 | 31058.26 |
+| munge | FALSE | TRUE | FALSE | FALSE | 100000 | 1.684 | 2000499000 |
+| sumstats | TRUE | TRUE | FALSE | FALSE | 100000 | 0.189 | 31058.26 |
+| munge | TRUE | TRUE | FALSE | FALSE | 100000 | 0.939 | 2000499000 |
+| sumstats | TRUE | TRUE | TRUE | FALSE | 100000 | 0.376 | 31058.26 |
+| munge | TRUE | TRUE | TRUE | FALSE | 100000 | 0.960 | 2000499000 |
+| sumstats | FALSE | FALSE | FALSE | TRUE | 100000 | 0.139 | 31058.26 |
+| munge | FALSE | FALSE | FALSE | TRUE | 100000 | 0.433 | 2000499000 |
+
+Interpretation:
+
+- This local smoke benchmark is not a substitute for the 16-CPU panda benchmark, but it shows the intended direction: the fused Rust prep engines beat the previous best local prep modes here.
+- Against old R ingestion/QC, the fused path improves `sumstats()` `1.322s -> 0.139s` (`9.5x`) and `munge()` `1.901s -> 0.433s` (`4.4x`) on 100k SNP / 2 traits.
+- Against the previous fast read + Rust QC mode, the fused path improves `sumstats()` `0.189s -> 0.139s` (`1.4x`) and `munge()` `0.939s -> 0.433s` (`2.2x`).
+- The current engine intentionally falls back for unsupported prep features such as `sumstats(direct.filter=TRUE)` and `keep.indel=TRUE`; the critical supported path is whitespace/gzip GWAS files with uniquely identified SNP, allele, effect, P, and required N/SE columns.
