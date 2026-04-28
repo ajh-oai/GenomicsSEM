@@ -85,3 +85,19 @@ Rscript repro/pfactor_practical_1m.R --target-snps 1000000 --old-gwas-snps 10000
 ```
 
 Outputs are written to `repro/results/pfactor_practical_1m_<timestamp>.csv`.
+
+To estimate the full old-lavaan 1M runtime without committing to the full slow run,
+`pfactor_old_lavaan_scaling.R` runs only the old `userGWAS()` lavaan path across bounded SNP
+counts and fits a linear elapsed-time slope:
+
+```sh
+Rscript repro/pfactor_old_lavaan_scaling.R \
+  --sizes 1000,5000,10000,25000,50000 \
+  --cores 16 \
+  --new-full-sec 12.380
+```
+
+This script expects `GenomicSEMPractical.RData` and `sumstats_new_1000000.rds` under
+`repro/data/pfactor_practical/`. Outputs are written to
+`repro/results/pfactor_old_lavaan_scaling_<timestamp>.csv` and
+`repro/results/pfactor_old_lavaan_scaling_projection_<timestamp>.csv`.
