@@ -1206,3 +1206,51 @@ Speedups and notes:
 - Remote old-vs-new `userGWAS()` equivalence on the 100-SNP window improved `12.233s -> 2.240s` on one core (`5.5x`) and `4.367s -> 2.215s` at 16 cores (`2.0x`) with max absolute numeric difference `1.8e-06`.
 - The full Rust-backed 1M scan completed in `81.752s` at one thread, `23.500s` at four threads, and `12.380s` at 16 threads (`6.6x` scaling from one to 16 threads).
 - Full old-lavaan 1M was again intentionally not run. On this pod, the 16-core old-lavaan 100-SNP measurement alone implies a rough linear 1M estimate on the order of 12 hours, so the bounded equivalence window is the practical old-vs-new check.
+
+## 2026-04-28 20:05 UTC - Old lavaan scaling to 50k on panda 16-CPU pod
+
+Change:
+
+- Added `repro/pfactor_old_lavaan_scaling.R`, which loads the cached public p-factor 1M `sumstats()` table, runs only the legacy lavaan `userGWAS()` path on bounded SNP slices, and fits a linear elapsed-time projection.
+- This entry supersedes the earlier 100-SNP-only extrapolation. The 100-SNP point overestimated the old full 1M runtime because fixed parallel overhead was still a large fraction of the run.
+
+Remote context:
+
+- brix workload: `ajh/genomicssem-oldscale-cpu16`
+- pod: `genomicssem-oldscale-cpu16-0`
+- cluster/quota: panda, flex
+- requested size: 16 CPU
+- node: `panda-cpu-e2512`
+- R stack: Ubuntu R 4.3.3 with lavaan 0.6-17
+- Data staging: copied local `GenomicSEMPractical.RData` and `sumstats_new_1000000.rds`; no remote public downloads.
+
+Command:
+
+```sh
+Rscript repro/pfactor_old_lavaan_scaling.R \
+  --sizes 1000,5000,10000,25000,50000 \
+  --cores 16 \
+  --new-full-sec 12.380
+```
+
+Results:
+
+| backend | cores | n_snp | elapsed_sec | per_snp_ms | rows | fast_path |
+|---|---:|---:|---:|---:|---:|---|
+| old_r_lavaan | 16 | 1000 | 15.334 | 15.3340 | 1000 | disabled |
+| old_r_lavaan | 16 | 5000 | 63.669 | 12.7338 | 5000 | disabled |
+| old_r_lavaan | 16 | 10000 | 124.734 | 12.4734 | 10000 | disabled |
+| old_r_lavaan | 16 | 25000 | 306.825 | 12.2730 | 25000 | disabled |
+| old_r_lavaan | 16 | 50000 | 608.350 | 12.1670 | 50000 | disabled |
+
+Projection:
+
+| model | intercept_sec | slope_sec_per_snp | projected_1m_sec | projected_1m_hours | r_squared | new_full_1m_sec | projected_speedup_vs_new |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| elapsed_sec ~ intercept + slope*n_snp | 3.472637 | 0.012104932 | 12108.405 | 3.363 | 0.999996 | 12.380 | 978.1x |
+
+Interpretation:
+
+- The better old-lavaan projection is about `3.36h` for 1M SNPs on this 16-CPU panda pod, not the earlier rough `~12h` from the 100-SNP point.
+- The measured Rust-backed 1M scan on the same class of pod was `12.380s`, so the slope-based old-vs-new model-fitting speedup is about `978x`.
+- The per-SNP time stabilizes near `12.2ms/SNP` by 25k-50k SNPs, which makes the linear projection much more defensible than the 100-SNP estimate.
