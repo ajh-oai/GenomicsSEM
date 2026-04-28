@@ -254,7 +254,7 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
   }
 
   if(use_fast_usergwas && !is.null(fast_fit_spec) && isTRUE(fast_fit_spec$supported) &&
-     sub[[1]] == FALSE && !smooth_check && !MPI){
+     !smooth_check && !MPI){
     batch_threads <- 1L
     if(parallel){
       if(is.null(cores)){
@@ -307,7 +307,8 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
         q_snp_info = q_snp_info,
         df = df,
         npar = npar,
-        model = model
+        model = model,
+        sub = sub
       )
       Results_List <- .set_fast_path_attr(Results_List, fast_path, fast_threads)
       time_all <- proc.time()-time
@@ -318,9 +319,7 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
       .fast_fallback("userGWAS", fast_fallback_reason)
     }
   } else if(use_fast_usergwas && !is.null(fast_fit_spec) && isTRUE(fast_fit_spec$supported)) {
-    fast_fallback_reason <- if(sub[[1]] != FALSE) {
-      "sub is not supported by the batched Rust userGWAS path"
-    } else if(smooth_check) {
+    fast_fallback_reason <- if(smooth_check) {
       "smooth_check=TRUE is not supported by the batched Rust userGWAS path"
     } else if(MPI) {
       "MPI=TRUE is not supported by the batched Rust userGWAS path"

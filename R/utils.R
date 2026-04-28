@@ -1425,9 +1425,10 @@ Please note that this is likely effective sample size cut in half. The function 
   )
 }
 
-.userGWAS_batch_results_fast <- function(batch_fit, spec, SNPs, TWAS, printwarn, Q_SNP, q_snp_info, df, npar, model) {
+.userGWAS_batch_results_fast <- function(batch_fit, spec, SNPs, TWAS, printwarn, Q_SNP, q_snp_info, df, npar, model, sub = FALSE) {
   f <- nrow(batch_fit$par)
-  out <- vector(mode = "list", length = f)
+  sub_requested <- !(sub[[1]] == FALSE)
+  out <- if (sub_requested) NULL else vector(mode = "list", length = f)
   free_fast <- as.integer(spec$ptable$free_fast)
   free_rows <- free_fast > 0L
   warn_names <- if(printwarn) c("error","warning") else character()
@@ -1518,7 +1519,24 @@ Please note that this is likely effective sample size cut in half. The function 
       }
     }
     colnames(final2) <- new_names
-    out[[i]] <- final2
+    if(sub_requested){
+      final2 <- subset(final2, paste0(final2$lhs, final2$op, final2$rhs, sep = "") %in% sub)
+      if(is.null(out)){
+        out <- vector(mode = "list", length = length(sub))
+        for(y in seq_along(sub)){
+          out[[y]] <- as.data.frame(matrix(NA, ncol = ncol(final2), nrow = f))
+          colnames(out[[y]]) <- colnames(final2)
+        }
+      }
+      for(y in seq_along(sub)){
+        row <- subset(final2, paste0(final2$lhs, final2$op, final2$rhs, sep = "") %in% sub[[y]])
+        if(nrow(row) > 0L){
+          out[[y]][i, ] <- row[1L, ]
+        }
+      }
+    }else{
+      out[[i]] <- final2
+    }
   }
 
   out

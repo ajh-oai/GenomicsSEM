@@ -21,6 +21,8 @@ target/
 *.o
 *.so
 benches/profiles/
+repro/results/
+src/symbols.rds
 
 # Output files from R CMD check
 /*.Rcheck/

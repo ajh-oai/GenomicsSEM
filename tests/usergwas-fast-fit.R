@@ -62,6 +62,23 @@ run_usergwas <- function(fast, q_snp = FALSE) {
   ))
 }
 
+run_usergwas_sub <- function(fast) {
+  options(GenomicSEM.use_rust = TRUE)
+  options(GenomicSEM.fast_usergwas_fit = fast)
+  suppressWarnings(userGWAS(
+    covstruc = inputs$covstruc,
+    SNPs = inputs$SNPs,
+    model = inputs$model,
+    sub = "F1~SNP",
+    estimation = "DWLS",
+    parallel = FALSE,
+    GC = "standard",
+    fix_measurement = TRUE,
+    Q_SNP = TRUE,
+    printwarn = TRUE
+  ))
+}
+
 compare_runs <- function(q_snp) {
   slow <- NULL
   fast <- NULL
@@ -87,5 +104,25 @@ compare_runs <- function(q_snp) {
   }
 }
 
+compare_sub_runs <- function() {
+  slow <- NULL
+  fast <- NULL
+  invisible(capture.output({
+    slow <- run_usergwas_sub(FALSE)
+    fast <- run_usergwas_sub(TRUE)
+  }))
+
+  stopifnot(length(slow) == 1L)
+  stopifnot(length(fast) == 1L)
+  stopifnot(identical(names(slow[[1]]), names(fast[[1]])))
+  stopifnot(identical(slow[[1]]$SNP, fast[[1]]$SNP))
+  stopifnot(max(abs(as.numeric(slow[[1]]$est) - as.numeric(fast[[1]]$est)), na.rm = TRUE) < 1e-5)
+  stopifnot(max(abs(as.numeric(slow[[1]]$SE) - as.numeric(fast[[1]]$SE)), na.rm = TRUE) < 1e-6)
+  stopifnot(max(abs(as.numeric(slow[[1]]$Q_SNP) - as.numeric(fast[[1]]$Q_SNP)), na.rm = TRUE) < 1e-5)
+  stopifnot(all(fast[[1]]$error == 0))
+  stopifnot(all(fast[[1]]$warning == 0))
+}
+
 compare_runs(FALSE)
 compare_runs(TRUE)
+compare_sub_runs()

@@ -991,3 +991,50 @@ Remote follow-up:
 - The first workload reconciled the GenomicSEM commit but failed pod initialization because the default brix initializer pointed at `/root/code/openai/personal/ajh/brix/setup.sh` while the workload only mounted the GenomicSEM repo.
 - Retrying with both `openai` and `GenomicSEM` repos was blocked by the brix git server's 50 MB file limit for unrelated large files in the local `openai` repo history.
 - The failed workload was deleted. No new remote benchmark numbers were produced in this attempt.
+
+## 2026-04-28 01:07 PDT - Grotzinger 2019 NHB reproduction and paper-shaped benchmark
+
+Change:
+
+- Added `repro/grotzinger_2019_nhb.R` and `repro/README.md`.
+- The harness hard-codes the published ALCH/PTSD/MDD/ANX LDSC `S`, `V`, `I`, `N`, and `m` matrices from the public GenomicSEM practical, reproduces the published no-SNP common-factor model, then benchmarks the same four-trait SNP-effect workflow through old R/lavaan and Rust-backed R bindings.
+- Removed a fast-path coverage gap in `userGWAS()`: the batched Rust path now supports `sub="F1~SNP"` style extraction instead of falling back. This matches the memory-saving usage documented in the public practical.
+
+Validation:
+
+```sh
+R CMD INSTALL --install-tests .
+Rscript tests/usergwas-fast-fit.R
+Rscript tests/fast-path-release.R
+Rscript repro/grotzinger_2019_nhb.R --model-snps 20 --prep-snps 200 --cores 1
+Rscript repro/grotzinger_2019_nhb.R --model-snps 1000 --prep-snps 100000 --cores 1,4
+```
+
+Reproduction:
+
+- Published common-factor `usermodel()` result matched the practical's fit/loadings with max absolute difference `2.611839e-06`.
+- The SNP-effect benchmark uses a paper-shaped four-trait chromosome-4 fixture with the first five practical SNP IDs and the exact published LDSC matrices. The original full practical GWAS files are referenced as cluster-local paths in the public HTML and were not web-downloadable, so this is a faithful workflow/performance benchmark rather than a full re-run of the original raw GWAS files.
+
+Benchmark summary:
+
+| stage | backend | cores | n_snp | elapsed_sec | max_abs_diff_vs_old | equivalent |
+|---|---|---:|---:|---:|---:|---|
+| paper_shaped_userGWAS_Q_SNP | old_r_lavaan | 1 | 1000 | 24.259 | 0 | TRUE |
+| paper_shaped_userGWAS_Q_SNP | new_rust_binding | 1 | 1000 | 1.013 | 5.021259e-06 | TRUE |
+| paper_shaped_userGWAS_Q_SNP | old_r_lavaan | 4 | 1000 | 6.341 | 0 | TRUE |
+| paper_shaped_userGWAS_Q_SNP | new_rust_binding | 4 | 1000 | 0.954 | 5.021259e-06 | TRUE |
+| paper_shaped_commonfactorGWAS | old_r_lavaan | 1 | 1000 | 53.927 | 0 | TRUE |
+| paper_shaped_commonfactorGWAS | new_rust_binding | 1 | 1000 | 0.056 | 2.755380e-06 | TRUE |
+| paper_shaped_commonfactorGWAS | old_r_lavaan | 4 | 1000 | 13.897 | 0 | TRUE |
+| paper_shaped_commonfactorGWAS | new_rust_binding | 4 | 1000 | 0.015 | 2.755380e-06 | TRUE |
+| paper_shaped_sumstats | old_r_prep | 1 | 100000 | 3.049 | 0 | TRUE |
+| paper_shaped_sumstats | new_rust_binding | 1 | 100000 | 0.288 | 3.469447e-18 | TRUE |
+| paper_shaped_munge | old_r_prep | 1 | 100000 | 4.992 | 0 | TRUE |
+| paper_shaped_munge | new_rust_binding | 1 | 100000 | 1.355 | 4.997316e-09 | TRUE |
+
+Speedups:
+
+- `userGWAS(Q_SNP=TRUE, sub="F1~SNP")`: `24.259s -> 1.013s` on one core (`23.9x`); `6.341s -> 0.954s` with four workers/threads (`6.6x`).
+- `commonfactorGWAS()`: `53.927s -> 0.056s` on one core (`963x`); `13.897s -> 0.015s` with four workers/threads (`926x`).
+- `sumstats()`: `3.049s -> 0.288s` (`10.6x`) on 100k SNP / 4 traits.
+- `munge()`: `4.992s -> 1.355s` (`3.7x`) on 100k SNP / 4 traits.
