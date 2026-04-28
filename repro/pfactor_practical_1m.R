@@ -246,13 +246,16 @@ compare_outputs <- function(old, new, tolerance = 1e-5) {
   )
 }
 
-download_sources <- function(data_dir, skip_download) {
+download_sources <- function(data_dir, skip_download, require_raw = TRUE) {
   manifest <- source_manifest()
   dir.create(data_dir, recursive = TRUE, showWarnings = FALSE)
 
   for (i in seq_len(nrow(manifest))) {
     dest <- file.path(data_dir, manifest$filename[[i]])
     if (file.exists(dest) && file.info(dest)$size > 0) {
+      next
+    }
+    if (!require_raw && manifest$artifact[[i]] != "GenomicSEMPractical.RData") {
       next
     }
     if (skip_download) {
@@ -521,7 +524,7 @@ main <- function() {
   dir.create(args$out_dir, recursive = TRUE, showWarnings = FALSE)
   timestamp <- format(Sys.time(), "%Y%m%d-%H%M%S")
 
-  paths <- download_sources(args$data_dir, args$skip_download)
+  paths <- download_sources(args$data_dir, args$skip_download, require_raw = !args$reuse_subset)
   fixture <- prepare_public_subset(paths, args)
   covstruc <- load_practical_covstruc(paths[["GenomicSEMPractical.RData"]])
 
