@@ -1088,3 +1088,56 @@ Speedups:
 - `userGWAS(Q_SNP=TRUE)` five-factor 14-disorder path: `14.628s -> 1.968s` on one core (`7.4x`); `4.194s -> 0.847s` with four workers/threads (`5.0x`).
 - `sumstats()`: `4.345s -> 0.471s` (`9.2x`) on 50k SNP / 14 traits.
 - `munge()`: `8.423s -> 2.423s` (`3.5x`) on 50k SNP / 14 traits.
+
+## 2026-04-28 11:41 PDT - Public practical p-factor 1M SNP replication
+
+Change:
+
+- Added `repro/pfactor_practical_1m.R`, a public-data harness using the GenomicSEM practical covariance object plus public SCZ, BIP, and MDD GWAS files.
+- Added Rust fast-path support for lavaan inequality bounds, so the practical residual-variance constraints (`a > .001`, `b > .001`, `c > .001`) stay on the Rust generic SEM path.
+- Added a vectorized `sub=` result assembler for Rust-backed `userGWAS()`. Profiling the first 1M run showed the Rust fit had finished but R-side per-SNP row construction and GC dominated output assembly.
+
+Command:
+
+```sh
+Rscript repro/pfactor_practical_1m.R \
+  --target-snps 1000000 \
+  --old-gwas-snps 100 \
+  --cores 1,4,16 \
+  --threads 16 \
+  --skip-download \
+  --reuse-subset \
+  --reuse-sumstats
+```
+
+Local context:
+
+- macOS arm64 laptop; cached downloads and cached old/new `sumstats()` RDS files from the prior failed 1M attempt.
+- Public source files:
+  - SCZ: `https://ndownloader.figshare.com/files/28198983`
+  - BIP: `https://ndownloader.figshare.com/files/28169301`
+  - MDD: `https://ndownloader.figshare.com/files/28169508`
+  - Practical covariance object: UT Box `GenomicSEMPractical.RData`
+
+Results:
+
+| stage | backend | cores | n_snp | elapsed_sec | max_abs_diff_vs_old | equivalent |
+|---|---|---:|---:|---:|---:|---|
+| public_pfactor_sumstats | old_r | 1 | 1291369 | 13.249 | 0 | TRUE |
+| public_pfactor_sumstats | new_rust | 1 | 1291369 | 3.993 | 1.387779e-17 | TRUE |
+| public_pfactor_userGWAS_compare | old_r_lavaan | 1 | 100 | 2.462 | 0 | TRUE |
+| public_pfactor_userGWAS_compare | new_rust_binding | 1 | 100 | 0.082 | 7.782055e-06 | TRUE |
+| public_pfactor_userGWAS_full | new_rust_binding | 1 | 1000000 | 36.090 | NA | NA |
+| public_pfactor_userGWAS_compare | old_r_lavaan | 4 | 100 | 0.906 | 0 | TRUE |
+| public_pfactor_userGWAS_compare | new_rust_binding | 4 | 100 | 0.082 | 7.782055e-06 | TRUE |
+| public_pfactor_userGWAS_full | new_rust_binding | 4 | 1000000 | 10.118 | NA | NA |
+| public_pfactor_userGWAS_compare | old_r_lavaan | 16 | 100 | 0.556 | 0 | TRUE |
+| public_pfactor_userGWAS_compare | new_rust_binding | 16 | 100 | 0.087 | 7.782055e-06 | TRUE |
+| public_pfactor_userGWAS_full | new_rust_binding | 16 | 1000000 | 4.527 | NA | NA |
+
+Speedups and notes:
+
+- `sumstats()` on the full aligned public data improved `13.249s -> 3.993s` (`3.3x`) with byte-level-equivalent numeric output on checked columns.
+- On the 100-SNP old-vs-new lavaan comparison, Rust-backed `userGWAS(sub="F1~SNP")` improved `2.462s -> 0.082s` on one core (`30.0x`) and `0.556s -> 0.087s` at 16 cores (`6.4x`), with max absolute numeric difference `7.8e-06`.
+- The full Rust-backed 1M SNP p-factor scan completed in `36.090s` at one thread and `4.527s` at 16 threads (`8.0x` scaling from 1 to 16).
+- Full old-lavaan 1M was not run in this local pass; `--old-gwas-snps=100` keeps the equivalence check bounded while the full 1M path is measured for the new implementation.
