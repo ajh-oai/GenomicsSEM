@@ -1488,6 +1488,79 @@ Please note that this is likely effective sample size cut in half. The function 
 .userGWAS_batch_results_fast <- function(batch_fit, spec, SNPs, TWAS, printwarn, Q_SNP, q_snp_info, df, npar, model, sub = FALSE) {
   f <- nrow(batch_fit$par)
   sub_requested <- !(sub[[1]] == FALSE)
+  if (sub_requested) {
+    ptable <- spec$ptable
+    row_keys <- paste0(ptable$lhs, ptable$op, ptable$rhs, sep = "")
+    snp_cols <- if(TWAS) c("Gene","Panel","HSQ") else c("SNP", "CHR", "BP", "MAF", "A1", "A2")
+    warn_names <- if(printwarn) c("error","warning") else character()
+
+    make_empty_sub <- function(q_snp_cols) {
+      out <- as.data.frame(matrix(NA, nrow = f, ncol = length(c(snp_cols, q_snp_cols, warn_names))))
+      colnames(out) <- c(snp_cols, q_snp_cols, warn_names)
+      out[snp_cols] <- SNPs[, snp_cols, drop = FALSE]
+      if(printwarn){
+        out$error <- 0
+        out$warning <- 0
+      }
+      out
+    }
+
+    build_sub <- function(term) {
+      row_idx <- which(row_keys == term & ptable$op != "da")
+      base_cols <- c("lhs", "op", "rhs", "free", "label", "est", "SE",
+                     "Z_Estimate", "Pval_Estimate", "chisq", "chisq_df",
+                     "chisq_pval", "AIC")
+      q_cols <- if(Q_SNP) c("Q_SNP", "Q_SNP_df", "Q_SNP_pval") else character()
+      if (length(row_idx) == 0L) {
+        return(make_empty_sub(c(base_cols, q_cols)))
+      }
+
+      row_idx <- row_idx[[1L]]
+      free <- as.integer(ptable$free_fast[row_idx])
+      est <- if (free > 0L) batch_fit$par[, free] else rep(.sem_fast_numeric_value(ptable$est[row_idx], NA_real_), f)
+      se <- if (free > 0L) batch_fit$se[, free] else rep(NA_real_, f)
+      z <- est / se
+      p <- 2 * pnorm(abs(z), lower.tail = FALSE)
+      chisq <- batch_fit$chisq
+
+      out <- as.data.frame(SNPs[, snp_cols, drop = FALSE])
+      colnames(out) <- snp_cols
+      out$lhs <- rep(ptable$lhs[row_idx], f)
+      out$op <- rep(ptable$op[row_idx], f)
+      out$rhs <- rep(ptable$rhs[row_idx], f)
+      out$free <- rep(ptable$free[row_idx], f)
+      out$label <- rep(ptable$label[row_idx], f)
+      out$est <- est
+      out$SE <- se
+      out$Z_Estimate <- z
+      out$Pval_Estimate <- p
+      out$chisq <- chisq
+      out$chisq_df <- rep(df, f)
+      out$chisq_pval <- pchisq(chisq, df, lower.tail = FALSE)
+      out$AIC <- chisq + 2 * npar
+
+      if(Q_SNP){
+        out$Q_SNP <- rep(NA_real_, f)
+        out$Q_SNP_df <- rep(NA_integer_, f)
+        out$Q_SNP_pval <- rep(NA_real_, f)
+        q_idx <- match(ptable$lhs[row_idx], q_snp_info$lv)
+        if(!is.na(q_idx) && ((ptable$rhs[row_idx] == "Gene" && TWAS) || (ptable$rhs[row_idx] == "SNP" && !TWAS))){
+          out$Q_SNP <- batch_fit$q_snp[, q_idx]
+          out$Q_SNP_df <- q_snp_info$df[[q_idx]]
+          out$Q_SNP_pval <- pchisq(out$Q_SNP, out$Q_SNP_df, lower.tail = FALSE)
+        }
+      }
+
+      if(printwarn){
+        out$error <- 0
+        out$warning <- 0
+      }
+      out
+    }
+
+    return(lapply(sub, build_sub))
+  }
+
   out <- if (sub_requested) NULL else vector(mode = "list", length = f)
   free_fast <- as.integer(spec$ptable$free_fast)
   free_rows <- free_fast > 0L
