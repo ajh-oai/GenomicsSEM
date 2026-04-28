@@ -1159,6 +1159,9 @@ Please note that this is likely effective sample size cut in half. The function 
 }
 
 .sem_fast_numeric_value <- function(x, fallback = 0) {
+  if (is.factor(x)) {
+    x <- as.character(x)
+  }
   x <- suppressWarnings(as.numeric(x))
   ifelse(is.finite(x), x, fallback)
 }
