@@ -1038,3 +1038,53 @@ Speedups:
 - `commonfactorGWAS()`: `53.927s -> 0.056s` on one core (`963x`); `13.897s -> 0.015s` with four workers/threads (`926x`).
 - `sumstats()`: `3.049s -> 0.288s` (`10.6x`) on 100k SNP / 4 traits.
 - `munge()`: `4.992s -> 1.355s` (`3.7x`) on 100k SNP / 4 traits.
+
+## 2026-04-28 01:42 PDT - Grotzinger 2025 Nature 14-disorder paper-shaped benchmark
+
+Change:
+
+- Added `repro/grotzinger_2025_nature.R` and expanded `repro/README.md`.
+- The harness targets Grotzinger et al. 2025/2026 Nature, "Mapping the genetic landscape across 14 psychiatric disorders."
+- It hard-codes the public Supplementary Table 1 LDSC genetic covariance estimates, LDSC standard errors, and intercept estimates for the 14 disorders, fits the reported five-factor model shape, and benchmarks the paper's `userGWAS(Q_SNP=TRUE)` shape through old R/lavaan versus the Rust-backed R binding.
+- It also benchmarks 14-trait `sumstats()` and `munge()` prep on generated paper-shaped raw summary statistic inputs.
+
+Public-data limitation:
+
+- The public supplement reports rounded LDSC point estimates and standard errors, but not the full GenomicSEM sampling covariance matrix `V`.
+- The harness therefore uses public rounded `S`, a diagonal `V` from reported standard errors, and `nearPD` smoothing for the rounded `S` matrix (`reported_min_eigen=-0.0022095`, `nearPD max delta=0.00179852`).
+- This is a same-input old-vs-new equivalence/performance benchmark for the 14-disorder execution path, not an exact full-paper rerun of the original LDSC/model fit.
+
+Validation:
+
+```sh
+R CMD INSTALL --install-tests .
+Rscript tests/usergwas-fast-fit.R
+cargo test --workspace
+Rscript repro/grotzinger_2025_nature.R --model-snps 5 --prep-snps 1000 --cores 1
+Rscript repro/grotzinger_2025_nature.R --model-snps 100 --prep-snps 50000 --cores 1,4
+```
+
+Reproduction notes:
+
+- The public rounded five-factor `usermodel()` check produced `max_abs_diff_vs_published=0.01805679` against the paper's all-autosome CFI/SRMR summary, so it is intentionally marked `equivalent_to_published=FALSE`.
+- This mismatch is expected from using rounded `S` and diagonal `V`; the original full `V` is not in the public Nature supplement or PGC factor summary-stat release.
+- PGC/figshare does publish the derived latent factor GWAS summary statistics (`cdg2025`, DOI `10.6084/m9.figshare.30359017`), but those are outputs rather than the 14 univariate inputs needed to rerun `userGWAS()`.
+
+Benchmark summary:
+
+| stage | backend | cores | n_snp | elapsed_sec | max_abs_diff_vs_old | equivalent |
+|---|---|---:|---:|---:|---:|---|
+| paper_shaped_2025_userGWAS_5factor_Q_SNP | old_r_lavaan | 1 | 100 | 14.628 | 0 | TRUE |
+| paper_shaped_2025_userGWAS_5factor_Q_SNP | new_rust_binding | 1 | 100 | 1.968 | 7.983980e-05 | TRUE |
+| paper_shaped_2025_userGWAS_5factor_Q_SNP | old_r_lavaan | 4 | 100 | 4.194 | 0 | TRUE |
+| paper_shaped_2025_userGWAS_5factor_Q_SNP | new_rust_binding | 4 | 100 | 0.847 | 7.983980e-05 | TRUE |
+| paper_shaped_2025_sumstats_14trait | old_r_prep | 1 | 50000 | 4.345 | 0 | TRUE |
+| paper_shaped_2025_sumstats_14trait | new_rust_binding | 1 | 50000 | 0.471 | 3.469447e-18 | TRUE |
+| paper_shaped_2025_munge_14trait | old_r_prep | 1 | 50000 | 8.423 | 0 | TRUE |
+| paper_shaped_2025_munge_14trait | new_rust_binding | 1 | 50000 | 2.423 | 5.575173e-09 | TRUE |
+
+Speedups:
+
+- `userGWAS(Q_SNP=TRUE)` five-factor 14-disorder path: `14.628s -> 1.968s` on one core (`7.4x`); `4.194s -> 0.847s` with four workers/threads (`5.0x`).
+- `sumstats()`: `4.345s -> 0.471s` (`9.2x`) on 50k SNP / 14 traits.
+- `munge()`: `8.423s -> 2.423s` (`3.5x`) on 50k SNP / 14 traits.
