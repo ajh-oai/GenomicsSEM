@@ -619,6 +619,8 @@ SEXP genomicssem_fit_generic_sem_call(
     SEXP b_free_,
     SEXP psi_free_,
     SEXP start_,
+    SEXP lower_,
+    SEXP upper_,
     SEXP max_iter_,
     SEXP tol_) {
   int nprotect = 0;
@@ -630,6 +632,8 @@ SEXP genomicssem_fit_generic_sem_call(
   SEXP b_free = protect_int_matrix(b_free_, "B_free", &nprotect);
   SEXP psi_free = protect_int_matrix(psi_free_, "Psi_free", &nprotect);
   SEXP start = protect_real_vector(start_, "start", &nprotect);
+  SEXP lower = protect_real_vector(lower_, "lower", &nprotect);
+  SEXP upper = protect_real_vector(upper_, "upper", &nprotect);
 
   size_t s_nrow, s_ncol, v_nrow, v_ncol, b_nrow, b_ncol, psi_nrow, psi_ncol;
   size_t b_free_nrow, b_free_ncol, psi_free_nrow, psi_free_ncol;
@@ -673,6 +677,10 @@ SEXP genomicssem_fit_generic_sem_call(
       (size_t)XLENGTH(psi_free),
       REAL(start),
       q,
+      REAL(lower),
+      (size_t)XLENGTH(lower),
+      REAL(upper),
+      (size_t)XLENGTH(upper),
       (size_t)max_iter_int,
       scalar_real(tol_, "tol"),
       REAL(out),
@@ -702,6 +710,8 @@ SEXP genomicssem_fit_generic_sem_batch_call(
     SEXP b_free_,
     SEXP psi_free_,
     SEXP start_,
+    SEXP lower_,
+    SEXP upper_,
     SEXP q_snp_indices_,
     SEXP q_snp_lengths_,
     SEXP max_iter_,
@@ -722,6 +732,8 @@ SEXP genomicssem_fit_generic_sem_batch_call(
   SEXP b_free = protect_int_matrix(b_free_, "B_free", &nprotect);
   SEXP psi_free = protect_int_matrix(psi_free_, "Psi_free", &nprotect);
   SEXP start = protect_real_vector(start_, "start", &nprotect);
+  SEXP lower = protect_real_vector(lower_, "lower", &nprotect);
+  SEXP upper = protect_real_vector(upper_, "upper", &nprotect);
   SEXP q_snp_indices = protect_int_matrix(q_snp_indices_, "q_snp_indices", &nprotect);
   SEXP q_snp_lengths = protect_int_matrix(q_snp_lengths_, "q_snp_lengths", &nprotect);
 
@@ -798,6 +810,10 @@ SEXP genomicssem_fit_generic_sem_batch_call(
       (size_t)XLENGTH(psi_free),
       REAL(start),
       q,
+      REAL(lower),
+      (size_t)XLENGTH(lower),
+      REAL(upper),
+      (size_t)XLENGTH(upper),
       INTEGER(q_snp_indices),
       q_idx_nrow,
       q_idx_ncol,

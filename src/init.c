@@ -79,6 +79,8 @@ extern SEXP genomicssem_fit_generic_sem_call(
     SEXP b_free_,
     SEXP psi_free_,
     SEXP start_,
+    SEXP lower_,
+    SEXP upper_,
     SEXP max_iter_,
     SEXP tol_);
 extern SEXP genomicssem_fit_generic_sem_batch_call(
@@ -100,6 +102,8 @@ extern SEXP genomicssem_fit_generic_sem_batch_call(
     SEXP b_free_,
     SEXP psi_free_,
     SEXP start_,
+    SEXP lower_,
+    SEXP upper_,
     SEXP q_snp_indices_,
     SEXP q_snp_lengths_,
     SEXP max_iter_,
@@ -172,8 +176,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"genomicssem_fit_commonfactor_main_call", (DL_FUNC)&genomicssem_fit_commonfactor_main_call, 7},
     {"genomicssem_fit_commonfactor_q_call", (DL_FUNC)&genomicssem_fit_commonfactor_q_call, 8},
     {"genomicssem_fit_commonfactor_batch_call", (DL_FUNC)&genomicssem_fit_commonfactor_batch_call, 15},
-    {"genomicssem_fit_generic_sem_call", (DL_FUNC)&genomicssem_fit_generic_sem_call, 12},
-    {"genomicssem_fit_generic_sem_batch_call", (DL_FUNC)&genomicssem_fit_generic_sem_batch_call, 23},
+    {"genomicssem_fit_generic_sem_call", (DL_FUNC)&genomicssem_fit_generic_sem_call, 14},
+    {"genomicssem_fit_generic_sem_batch_call", (DL_FUNC)&genomicssem_fit_generic_sem_batch_call, 25},
     {"genomicssem_munge_qc_call", (DL_FUNC)&genomicssem_munge_qc_call, 10},
     {"genomicssem_munge_fused_call", (DL_FUNC)&genomicssem_munge_fused_call, 10},
     {"genomicssem_sumstats_qc_call", (DL_FUNC)&genomicssem_sumstats_qc_call, 16},

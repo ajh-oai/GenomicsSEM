@@ -1193,13 +1193,22 @@ Please note that this is likely effective sample size cut in half. The function 
   b_free <- matrix(0L, total_n, total_n, dimnames = list(total_names, total_names))
   psi_free <- matrix(0L, total_n, total_n, dimnames = list(total_names, total_names))
   start <- rep(0, length(free_ids))
+  lower <- rep(-Inf, length(free_ids))
+  upper <- rep(Inf, length(free_ids))
+
+  ptable_value <- function(name, row, fallback = NA_real_) {
+    if (name %in% names(ptable)) {
+      return(ptable[[name]][row])
+    }
+    fallback
+  }
 
   value_for_row <- function(row) {
-    est <- .sem_fast_numeric_value(ptable$est[row], NA_real_)
+    est <- .sem_fast_numeric_value(ptable_value("est", row), NA_real_)
     if (is.finite(est)) {
       return(est)
     }
-    ustart <- .sem_fast_numeric_value(ptable$ustart[row], NA_real_)
+    ustart <- .sem_fast_numeric_value(ptable_value("ustart", row), NA_real_)
     if (is.finite(ustart)) {
       return(ustart)
     }
@@ -1207,6 +1216,33 @@ Please note that this is likely effective sample size cut in half. The function 
       return(1)
     }
     0
+  }
+
+  if ("lower" %in% names(ptable) || "upper" %in% names(ptable)) {
+    for (row in seq_len(nrow(ptable))) {
+      free <- as.integer(ptable$free_fast[row])
+      if (free <= 0L) {
+        next
+      }
+
+      if ("lower" %in% names(ptable)) {
+        row_lower <- .sem_fast_numeric_value(ptable$lower[row], -Inf)
+        if (row_lower > lower[free]) {
+          lower[free] <- row_lower
+        }
+      }
+
+      if ("upper" %in% names(ptable)) {
+        row_upper <- .sem_fast_numeric_value(ptable$upper[row], Inf)
+        if (row_upper < upper[free]) {
+          upper[free] <- row_upper
+        }
+      }
+    }
+  }
+
+  if (any(is.nan(lower)) || any(is.nan(upper)) || any(lower >= upper)) {
+    return(list(supported = FALSE, reason = "invalid parameter bounds"))
   }
 
   for (row in seq_len(nrow(ptable))) {
@@ -1246,6 +1282,24 @@ Please note that this is likely effective sample size cut in half. The function 
   }
 
   start[!is.finite(start)] <- 0
+  for (free in seq_along(start)) {
+    if (is.finite(lower[free]) && start[free] <= lower[free]) {
+      eps <- max(1e-8, 1e-8 * abs(lower[free]))
+      if (is.finite(upper[free])) {
+        eps <- min(eps, (upper[free] - lower[free]) / 2)
+      }
+      start[free] <- lower[free] + eps
+    }
+
+    if (is.finite(upper[free]) && start[free] >= upper[free]) {
+      eps <- max(1e-8, 1e-8 * abs(upper[free]))
+      if (is.finite(lower[free])) {
+        eps <- min(eps, (upper[free] - lower[free]) / 2)
+      }
+      start[free] <- upper[free] - eps
+    }
+  }
+
   list(
     supported = TRUE,
     ptable = ptable,
@@ -1256,7 +1310,9 @@ Please note that this is likely effective sample size cut in half. The function 
     psi_fixed = psi_fixed,
     b_free = b_free,
     psi_free = psi_free,
-    start = start
+    start = start,
+    lower = lower,
+    upper = upper
   )
 }
 
@@ -1280,6 +1336,8 @@ Please note that this is likely effective sample size cut in half. The function 
       matrix(as.integer(spec$b_free), nrow = nrow(spec$b_free), ncol = ncol(spec$b_free)),
       matrix(as.integer(spec$psi_free), nrow = nrow(spec$psi_free), ncol = ncol(spec$psi_free)),
       as.numeric(spec$start),
+      as.numeric(spec$lower),
+      as.numeric(spec$upper),
       as.integer(max_iter),
       as.numeric(tol),
       PACKAGE = "GenomicSEM"
@@ -1388,6 +1446,8 @@ Please note that this is likely effective sample size cut in half. The function 
       matrix(as.integer(spec$b_free), nrow = nrow(spec$b_free), ncol = ncol(spec$b_free)),
       matrix(as.integer(spec$psi_free), nrow = nrow(spec$psi_free), ncol = ncol(spec$psi_free)),
       as.numeric(spec$start),
+      as.numeric(spec$lower),
+      as.numeric(spec$upper),
       matrix(as.integer(q_snp_info$indices), nrow = nrow(q_snp_info$indices), ncol = ncol(q_snp_info$indices)),
       matrix(as.integer(q_snp_info$lengths), ncol = 1L),
       as.integer(max_iter),

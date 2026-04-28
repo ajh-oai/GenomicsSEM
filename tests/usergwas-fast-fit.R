@@ -45,14 +45,34 @@ make_inputs <- function(n_snp = 8L, k = 4L) {
 }
 
 inputs <- make_inputs()
+constrained_inputs <- make_inputs()
+constraint_traits <- colnames(constrained_inputs$covstruc$S)
+constraint_labels <- paste0("theta", seq_along(constraint_traits))
+constrained_inputs$model <- paste(
+  constrained_inputs$model,
+  paste0(constraint_traits, " ~~ ", constraint_labels, "*", constraint_traits, collapse = "\n"),
+  paste0(constraint_labels, " > 0.001", collapse = "\n"),
+  sep = "\n"
+)
 
-run_usergwas <- function(fast, q_snp = FALSE) {
+bound_spec <- getFromNamespace(".sem_fast_compile", "GenomicSEM")(
+  lavaan::lavaanify(
+    "F1 =~ T1 + T2 + T3\nT1 ~~ theta*T1\ntheta > 0.001",
+    auto.var = TRUE,
+    auto.fix.first = TRUE
+  ),
+  paste0("T", 1:3)
+)
+stopifnot(isTRUE(bound_spec$supported))
+stopifnot(any(abs(bound_spec$lower - 0.001) < .Machine$double.eps^0.5))
+
+run_usergwas <- function(fast, q_snp = FALSE, input_data = inputs) {
   options(GenomicSEM.use_rust = TRUE)
   options(GenomicSEM.fast_usergwas_fit = fast)
   suppressWarnings(userGWAS(
-    covstruc = inputs$covstruc,
-    SNPs = inputs$SNPs,
-    model = inputs$model,
+    covstruc = input_data$covstruc,
+    SNPs = input_data$SNPs,
+    model = input_data$model,
     estimation = "DWLS",
     parallel = FALSE,
     GC = "standard",
@@ -62,13 +82,13 @@ run_usergwas <- function(fast, q_snp = FALSE) {
   ))
 }
 
-run_usergwas_sub <- function(fast) {
+run_usergwas_sub <- function(fast, input_data = inputs) {
   options(GenomicSEM.use_rust = TRUE)
   options(GenomicSEM.fast_usergwas_fit = fast)
   suppressWarnings(userGWAS(
-    covstruc = inputs$covstruc,
-    SNPs = inputs$SNPs,
-    model = inputs$model,
+    covstruc = input_data$covstruc,
+    SNPs = input_data$SNPs,
+    model = input_data$model,
     sub = "F1~SNP",
     estimation = "DWLS",
     parallel = FALSE,
@@ -79,14 +99,15 @@ run_usergwas_sub <- function(fast) {
   ))
 }
 
-compare_runs <- function(q_snp) {
+compare_runs <- function(q_snp, input_data = inputs) {
   slow <- NULL
   fast <- NULL
   invisible(capture.output({
-    slow <- run_usergwas(FALSE, q_snp = q_snp)
-    fast <- run_usergwas(TRUE, q_snp = q_snp)
+    slow <- run_usergwas(FALSE, q_snp = q_snp, input_data = input_data)
+    fast <- run_usergwas(TRUE, q_snp = q_snp, input_data = input_data)
   }))
 
+  stopifnot(identical(attr(fast, "GenomicSEM.fast_path"), "rust_usergwas_batch"))
   slow <- do.call(rbind, slow)
   fast <- do.call(rbind, fast)
 
@@ -125,4 +146,6 @@ compare_sub_runs <- function() {
 
 compare_runs(FALSE)
 compare_runs(TRUE)
+compare_runs(FALSE, constrained_inputs)
+compare_runs(TRUE, constrained_inputs)
 compare_sub_runs()

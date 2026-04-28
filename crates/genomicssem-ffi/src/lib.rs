@@ -466,6 +466,10 @@ pub unsafe extern "C" fn genomicssem_fit_generic_sem(
     psi_free_len: usize,
     start: *const f64,
     start_len: usize,
+    lower: *const f64,
+    lower_len: usize,
+    upper: *const f64,
+    upper_len: usize,
     max_iter: usize,
     tol: f64,
     out: *mut f64,
@@ -480,6 +484,8 @@ pub unsafe extern "C" fn genomicssem_fit_generic_sem(
         let b_free = checked_slice(b_free, b_free_len)?;
         let psi_free = checked_slice(psi_free, psi_free_len)?;
         let start = checked_slice(start, start_len)?;
+        let lower = checked_slice(lower, lower_len)?;
+        let upper = checked_slice(upper, upper_len)?;
         let out = checked_slice_mut(out, out_len)?;
 
         fit_generic_sem(
@@ -497,6 +503,8 @@ pub unsafe extern "C" fn genomicssem_fit_generic_sem(
             b_free,
             psi_free,
             start,
+            lower,
+            upper,
             max_iter,
             tol,
             out,
@@ -546,6 +554,10 @@ pub unsafe extern "C" fn genomicssem_fit_generic_sem_batch(
     psi_free_len: usize,
     start: *const f64,
     start_len: usize,
+    lower: *const f64,
+    lower_len: usize,
+    upper: *const f64,
+    upper_len: usize,
     q_snp_indices: *const i32,
     q_snp_nrow: usize,
     q_snp_ncol: usize,
@@ -576,6 +588,8 @@ pub unsafe extern "C" fn genomicssem_fit_generic_sem_batch(
         let b_free = checked_slice(b_free, b_free_len)?;
         let psi_free = checked_slice(psi_free, psi_free_len)?;
         let start = checked_slice(start, start_len)?;
+        let lower = checked_slice(lower, lower_len)?;
+        let upper = checked_slice(upper, upper_len)?;
         let q_snp_indices = checked_slice(q_snp_indices, q_snp_nrow * q_snp_ncol)?;
         let q_snp_lengths = checked_slice(q_snp_lengths, q_snp_lengths_len)?;
         let out = checked_slice_mut(out, out_len)?;
@@ -611,6 +625,8 @@ pub unsafe extern "C" fn genomicssem_fit_generic_sem_batch(
             b_free,
             psi_free,
             start,
+            lower,
+            upper,
             q_snp_indices,
             q_snp_nrow,
             q_snp_ncol,

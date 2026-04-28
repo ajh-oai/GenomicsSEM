@@ -819,6 +819,40 @@ fn vech_from_matrix_col_major(matrix: &[f64], n: usize, out: &mut [f64]) {
     }
 }
 
+fn validate_parameter_bounds(q: usize, lower: &[f64], upper: &[f64]) -> KernelResult<()> {
+    if lower.len() != q || upper.len() != q {
+        return Err(KernelError::BadDimensions);
+    }
+
+    for j in 0..q {
+        if lower[j].is_nan() || upper[j].is_nan() || lower[j] >= upper[j] {
+            return Err(KernelError::BadDimensions);
+        }
+    }
+
+    Ok(())
+}
+
+fn project_parameters_to_bounds(p: &mut [f64], lower: &[f64], upper: &[f64]) -> KernelResult<()> {
+    validate_parameter_bounds(p.len(), lower, upper)?;
+
+    for j in 0..p.len() {
+        if p[j].is_nan() {
+            return Err(KernelError::BadDimensions);
+        }
+        if p[j] < lower[j] {
+            p[j] = lower[j];
+        } else if p[j] > upper[j] {
+            p[j] = upper[j];
+        }
+        if !p[j].is_finite() {
+            return Err(KernelError::BadDimensions);
+        }
+    }
+
+    Ok(())
+}
+
 fn generic_sem_implied(
     obs_n: usize,
     total_n: usize,
@@ -1690,6 +1724,8 @@ pub fn fit_generic_sem(
     b_free: &[i32],
     psi_free: &[i32],
     start: &[f64],
+    lower: &[f64],
+    upper: &[f64],
     max_iter: usize,
     tol: f64,
     out: &mut [f64],
@@ -1713,15 +1749,19 @@ pub fn fit_generic_sem(
         || psi_fixed.len() != total_sq
         || b_free.len() != total_sq
         || psi_free.len() != total_sq
+        || lower.len() != q
+        || upper.len() != q
         || out.len() != out_len
     {
         return Err(KernelError::BadDimensions);
     }
+    validate_parameter_bounds(q, lower, upper)?;
 
     let mut y = vec![0.0; m];
     vech_from_matrix_col_major(s_full, obs_n, &mut y);
 
     let mut p = start.to_vec();
+    project_parameters_to_bounds(&mut p, lower, upper)?;
     let mut sigma = vec![0.0; m];
     let mut delta = vec![0.0; m * q];
     let mut converged = false;
@@ -1767,6 +1807,7 @@ pub fn fit_generic_sem(
             for j in 0..q {
                 candidate[j] = p[j] + alpha * step[j];
             }
+            project_parameters_to_bounds(&mut candidate, lower, upper)?;
 
             let mut sigma_candidate = vec![0.0; m];
             generic_sem_implied(
@@ -1799,10 +1840,11 @@ pub fn fit_generic_sem(
             for j in 0..q {
                 candidate[j] = p[j] + alpha * step[j];
             }
+            project_parameters_to_bounds(&mut candidate, lower, upper)?;
         }
 
         for j in 0..q {
-            let scaled = (alpha * step[j]).abs() / (1.0 + p[j].abs());
+            let scaled = (candidate[j] - p[j]).abs() / (1.0 + p[j].abs());
             if scaled > max_scaled_step {
                 max_scaled_step = scaled;
             }
@@ -2041,6 +2083,8 @@ fn fit_generic_sem_snp_fast(
     b_free: &[i32],
     psi_free: &[i32],
     start: &[f64],
+    lower: &[f64],
+    upper: &[f64],
     q_snp_indices_zero: &[i32],
     q_snp_nrow: usize,
     q_snp_ncol: usize,
@@ -2134,6 +2178,8 @@ fn fit_generic_sem_snp_fast(
         b_free,
         psi_free,
         start,
+        lower,
+        upper,
         max_iter,
         tol,
         &mut fit_out,
@@ -2249,6 +2295,8 @@ pub fn fit_generic_sem_batch(
     b_free: &[i32],
     psi_free: &[i32],
     start: &[f64],
+    lower: &[f64],
+    upper: &[f64],
     q_snp_indices_one: &[i32],
     q_snp_nrow: usize,
     q_snp_ncol: usize,
@@ -2282,12 +2330,15 @@ pub fn fit_generic_sem_batch(
         || psi_fixed.len() != total_sq
         || b_free.len() != total_sq
         || psi_free.len() != total_sq
+        || lower.len() != q
+        || upper.len() != q
         || q_snp_indices_one.len() != q_snp_nrow * q_snp_ncol
         || q_snp_lengths.len() != q_snp_ncol
         || out.len() != beta_nrow * out_cols
     {
         return Err(KernelError::BadDimensions);
     }
+    validate_parameter_bounds(q, lower, upper)?;
 
     let mut order_zero = vec![0usize; m];
     for (i, value) in order_one.iter().enumerate() {
@@ -2360,6 +2411,8 @@ pub fn fit_generic_sem_batch(
                     b_free,
                     psi_free,
                     start,
+                    lower,
+                    upper,
                     &q_snp_indices_zero,
                     q_snp_nrow,
                     q_snp_ncol,
@@ -2410,6 +2463,8 @@ pub fn fit_generic_sem_batch(
                 b_free,
                 psi_free,
                 start,
+                lower,
+                upper,
                 &q_snp_indices_zero,
                 q_snp_nrow,
                 q_snp_ncol,
