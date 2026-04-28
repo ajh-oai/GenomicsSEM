@@ -1164,17 +1164,19 @@ Please note that this is likely effective sample size cut in half. The function 
 }
 
 .sem_fast_compile <- function(ptable, observed_names) {
-  unsupported_ops <- setdiff(unique(ptable$op), c("=~", "~", "~~"))
+  constraint_ops <- c(">", ">=", "<", "<=")
+  model_rows <- !(ptable$op %in% constraint_ops)
+  unsupported_ops <- setdiff(unique(ptable$op), c("=~", "~", "~~", constraint_ops))
   if (length(unsupported_ops) > 0L) {
     return(list(supported = FALSE, reason = paste("unsupported ops:", paste(unsupported_ops, collapse = ","))))
   }
 
   observed_names <- as.character(observed_names)
-  latent_names <- unique(ptable$lhs[ptable$op == "=~"])
+  latent_names <- unique(ptable$lhs[model_rows & ptable$op == "=~"])
   latent_names <- setdiff(latent_names, observed_names)
   total_names <- c(observed_names, latent_names)
 
-  if (length(total_names) == 0L || anyNA(match(c(ptable$lhs, ptable$rhs), total_names))) {
+  if (length(total_names) == 0L || anyNA(match(c(ptable$lhs[model_rows], ptable$rhs[model_rows]), total_names))) {
     return(list(supported = FALSE, reason = "could not map model variables"))
   }
 
@@ -1241,11 +1243,40 @@ Please note that this is likely effective sample size cut in half. The function 
     }
   }
 
+  if (any(!model_rows)) {
+    for (row in which(!model_rows)) {
+      op <- ptable$op[row]
+      lhs_value <- .sem_fast_numeric_value(ptable$lhs[row], NA_real_)
+      rhs_value <- .sem_fast_numeric_value(ptable$rhs[row], NA_real_)
+      if (is.finite(lhs_value) && !is.finite(rhs_value)) {
+        label <- as.character(ptable$rhs[row])
+        bound <- lhs_value
+        op <- switch(op, ">" = "<", ">=" = "<=", "<" = ">", "<=" = ">=", op)
+      } else if (!is.finite(lhs_value) && is.finite(rhs_value)) {
+        label <- as.character(ptable$lhs[row])
+        bound <- rhs_value
+      } else {
+        return(list(supported = FALSE, reason = "unsupported parameter constraint"))
+      }
+
+      target_free <- unique(as.integer(ptable$free_fast[model_rows & ptable$label == label & ptable$free_fast > 0L]))
+      if (length(target_free) != 1L || is.na(target_free)) {
+        return(list(supported = FALSE, reason = "could not map parameter constraint"))
+      }
+
+      if (op == ">" || op == ">=") {
+        lower[target_free] <- max(lower[target_free], bound)
+      } else if (op == "<" || op == "<=") {
+        upper[target_free] <- min(upper[target_free], bound)
+      }
+    }
+  }
+
   if (any(is.nan(lower)) || any(is.nan(upper)) || any(lower >= upper)) {
     return(list(supported = FALSE, reason = "invalid parameter bounds"))
   }
 
-  for (row in seq_len(nrow(ptable))) {
+  for (row in which(model_rows)) {
     op <- ptable$op[row]
     lhs <- ptable$lhs[row]
     rhs <- ptable$rhs[row]
