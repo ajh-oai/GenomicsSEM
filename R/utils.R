@@ -1246,8 +1246,9 @@ Please note that this is likely effective sample size cut in half. The function 
     }
   }
 
-  if (any(!model_rows)) {
-    for (row in which(!model_rows)) {
+  constraint_rows <- ptable$op %in% constraint_ops
+  if (any(constraint_rows)) {
+    for (row in which(constraint_rows)) {
       op <- ptable$op[row]
       lhs_value <- .sem_fast_numeric_value(ptable$lhs[row], NA_real_)
       rhs_value <- .sem_fast_numeric_value(ptable$rhs[row], NA_real_)
