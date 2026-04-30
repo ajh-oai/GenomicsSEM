@@ -9,6 +9,9 @@ based on the summary statistics obtained from genome wide association studies (G
  
 **Rust-backed fast paths**: Source installs now build native Rust kernels with Cargo. Low-level kernels, native row-QC for supported `munge()`/`sumstats()` prep paths, faster table reading for `munge()`, `sumstats()`, `ldsc()`, and `s_ldsc()`, and native LDSC block crossproducts are enabled by default when available. The LDSC block kernel uses up to 4 Rust worker threads by default and can be tuned with `options(GenomicSEM.fast_ldsc_threads=...)`. Experimental batched model-fitting fast paths for supported `commonfactorGWAS()` and `userGWAS()` DWLS runs can be enabled with `options(GenomicSEM.fast_commonfactor_fit=TRUE)` and `options(GenomicSEM.fast_usergwas_fit=TRUE)`. Use `options(GenomicSEM.fast_diagnostics=TRUE)` to confirm which path was used; returned objects also include `GenomicSEM.fast_path` attributes.
 
+For a concise summary of the Rust acceleration work, reproduced workflows, and measured speedups in
+this development branch, see [UPDATES.MD](UPDATES.MD).
+
 **v0.0.4 Patch notes**: This update is the start of a large code restructure and contains minimal changes for users (see below), but large changes for developers (see [patchnotes](PATCHNOTES.md)).  
 **v0.0.4 Feature update**: `userGWAS()`, `commonfactorGWAS()` and `sumstats()` can now be run in parallel on Windows systems, additionally `munge()` can now be run in parallel as well (on both Linux/Mac and Windows). A number of functions now contain checks on input (ideally) preventing the function from stopping halway through analysis due to incorrect input. Input to `files` argument for `munge()` and `sumstats()` should now be a vector (a list will still work for now for backwards compatibility).
 
