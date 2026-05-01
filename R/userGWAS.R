@@ -78,73 +78,18 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
   V_LD <- as.matrix(covstruc[[1]])
   S_LD <- as.matrix(covstruc[[2]])
   I_LD <- as.matrix(covstruc[[3]])
+  rownames(S_LD) <- colnames(S_LD)
   Model1 <- model
-  
-  if(fix_measurement){
-      
-      #name rownames as column names
-      rownames(S_LD)<-colnames(S_LD)
-      
-      #split by lines of code
-      lines <- strsplit(model, "\n")[[1]]
-      
-      # Use grep to find lines containing "SNP" or "Gene" and exclude them
-      if(TWAS){
-        filtered_lines <- lines[!grepl(c("Gene"), lines)]
-      }else{filtered_lines <- lines[!grepl("SNP", lines)]}
-      
-      #remove ghost parameters as this could include SNP/Gene effects 
-      filtered_lines<-filtered_lines[!grepl(c(":="), filtered_lines)]
-      
-      # Join the filtered lines back into a single text string
-      noSNPmodel <- paste(filtered_lines, collapse = "\n")
-      
-      #smooth S and V matrices if necessary
-      smoothS<-ifelse(eigen(S_LD)$values[nrow(S_LD)] <= 0, S_LD<-as.matrix((nearPD(S_LD, corr = FALSE))$mat), S_LD<-S_LD)
-      smoothV<-ifelse(eigen(V_LD)$values[nrow(V_LD)] <= 0, V_LD<-as.matrix((nearPD(V_LD, corr = FALSE))$mat), V_LD<-V_LD)
-      
-      #estimate a no SNP model to get the estimates for the measurement model
-      W <- solve(V_LD,tol=toler)
-      
-      #estimate with incorrectly ordered V to get internal representation of V
-      testnoSNP <- .tryCatch.W.E(ReorderModelnoSNP <- sem(noSNPmodel, sample.cov = S_LD, estimator = "DWLS",se="standard",
-                                                          WLS.V = W, sample.nobs = 2, optim.dx.tol = .01, optim.force.converged=TRUE
-                                                          ,control=list(iter.max=1),std.lv=std.lv))
-      
-      #obtain V ordering for this model
-      order <- .rearrange(k = ncol(S_LD), fit = ReorderModelnoSNP, names = colnames(S_LD))
-      
-      #reorder sampling covariance matrix based on what lavaan expects given the specified model
-      V_Reorder <- V_LD[order, order]
-      u <- nrow(V_Reorder)
-      W_Reorder<- diag(u)
-      diag(W_Reorder) <- diag(V_Reorder)
-      
-      ##invert the reordered sampling covariance matrix to create a weight matrix
-      W_Reorder <- solve(W_Reorder, tol=toler)
-      
-      #estimate the measurement model
-      if(estimation == "DWLS"){
-        ##run the model. save failed runs and run model. warning and error functions prevent loop from breaking if there is an error. 
-        emptynoSNP<-.tryCatch.W.E(Model1_Results <- sem(noSNPmodel, sample.cov = S_LD, se="standard", estimator = "DWLS", WLS.V = W_Reorder, sample.nobs = 2,optim.dx.tol = .01,std.lv=std.lv))
-      }
-      
-      if(estimation == "ML"){
-          emptynoSNP<-.tryCatch.W.E(Model1_Results <- sem(noSNPmodel, sample.cov = S_LD, estimator = "ML",  sample.nobs = 200,optim.dx.tol = .01,sample.cov.rescale=FALSE,std.lv=std.lv))
-      }
-      
-      #pull the model results
-      Model1<- parTable(Model1_Results)
-      
-      #fix any parameter that is not a (residual) variance
-      for(p in 1:nrow(Model1)){
-        Model1$free[p]<-ifelse(Model1$lhs[p] != Model1$rhs[p], 0, Model1$free[p]) 
-      }
+  use_fast_usergwas <- estimation == "DWLS" && isTRUE(getOption("GenomicSEM.fast_usergwas_fit", FALSE))
 
-     #swap out NA values in ustart column to avoid lavaan error
-    Model1$ustart<-ifelse(is.na(Model1$ustart),0,Model1$ustart)
-      
+  if(fix_measurement){
+    if(eigen(S_LD)$values[nrow(S_LD)] <= 0){
+      S_LD <- as.matrix((nearPD(S_LD, corr = FALSE))$mat)
     }
+    if(eigen(V_LD)$values[nrow(V_LD)] <= 0){
+      V_LD <- as.matrix((nearPD(V_LD, corr = FALSE))$mat)
+    }
+  }
   
   beta_SNP <- SNPs[,grep("beta.",fixed=TRUE,colnames(SNPs))]
   SE_SNP <- SNPs[,grep("se.",fixed=TRUE,colnames(SNPs))]
@@ -172,60 +117,53 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
   
   k2 <- ncol(S_Full)
   
-  ##run one model that specifies the factor structure so that lavaan knows how to rearrange the V (i.e., sampling covariance) matrix
-  for (i in 1) {
-    
-    W <- solve(V_full,tol=toler)
-    
-    test2 <- .tryCatch.W.E(ReorderModel <- sem(model, sample.cov = S_Full, estimator = "DWLS",se="standard",
-                                               WLS.V = W, sample.nobs = 2, optim.dx.tol = .01, optim.force.converged=TRUE
-                                               ,control=list(iter.max=1),std.lv=std.lv))
-    
-    if(fix_measurement){
-      #pull the model with SNP effects
-      withSNP<-parTable(ReorderModel)
-      
-      #rbind back in Gene/SNP effects
-      if(TWAS){
-        for(p in 1:nrow(withSNP)){
-          if(withSNP$rhs[p] == "Gene" | withSNP$lhs[p] == "Gene"){
-            Model1<-rbind(Model1,withSNP[p,])
-          }
-        }
-      }else{ 
-        for(p in 1:nrow(withSNP)){
-          if(withSNP$rhs[p] == "SNP" | withSNP$lhs[p] == "SNP"){
-            Model1<-rbind(Model1,withSNP[p,])
-          }
-        }
-      }
-      
-      #rbind back in ghost parameters if relevant
-      for(p in 1:nrow(withSNP)){
-        if(withSNP$op[p] == ":="){
-          Model1<-rbind(Model1,withSNP[p,])
-        }
-      }
-      
-      #rbind back in parameter constraints if relevant
-      for(p in 1:nrow(withSNP)){
-        if(withSNP$op[p] %in% c("==", "<", ">", "<=", ">=")){
-          Model1<-rbind(Model1,withSNP[p,])
-        }
-      }
-      
-      #estimate model with SNP effects and fixed measurement model to get ordering of V
-      test3 <- .tryCatch.W.E(ReorderModel <- sem(Model1, sample.cov = S_Full, estimator = "DWLS",se="standard",
-                                                 WLS.V = W, sample.nobs = 2, optim.dx.tol = .01, optim.force.converged=TRUE,
-                                                 control=list(iter.max=1),std.lv=std.lv))
+  exposure_name <- if(TWAS) "Gene" else "SNP"
+  native_setup <- NULL
+  fast_fallback_reason <- NULL
+  if(use_fast_usergwas && isTRUE(getOption("GenomicSEM.fast_usergwas_native_setup", TRUE)) &&
+     !smooth_check && !MPI){
+    native_setup <- .sem_fast_prepare_usergwas(
+      model = model,
+      S_LD = S_LD,
+      V_LD = V_LD,
+      S_Full = S_Full,
+      V_full = V_full,
+      exposure_name = exposure_name,
+      fix_measurement = fix_measurement,
+      std.lv = std.lv,
+      toler = toler
+    )
+    if(!isTRUE(native_setup$supported)){
+      fast_fallback_reason <- paste("native userGWAS setup unavailable:", native_setup$reason)
+      .fast_fallback("userGWAS", fast_fallback_reason)
+      native_setup <- NULL
     }
-    
-    #final ordering to use for multivariate GWAS model
-    order <- .rearrange(k = k2, fit = ReorderModel, names = rownames(S_Full))
-    
-    suppressWarnings(df <- lavInspect(ReorderModel, "fit")["df"])
-    suppressWarnings(npar <- lavInspect(ReorderModel, "fit")["npar"])
-    
+  }
+
+  if(!is.null(native_setup)){
+    fast_fit_spec <- native_setup$spec
+    order <- native_setup$order
+    df <- native_setup$df
+    npar <- native_setup$npar
+  } else {
+    lavaan_setup <- .userGWAS_lavaan_setup(
+      model = model,
+      S_LD = S_LD,
+      V_LD = V_LD,
+      S_Full = S_Full,
+      V_full = V_full,
+      fix_measurement = fix_measurement,
+      TWAS = TWAS,
+      estimation = estimation,
+      std.lv = std.lv,
+      toler = toler
+    )
+    Model1 <- lavaan_setup$Model1
+    ReorderModel <- lavaan_setup$ReorderModel
+    order <- lavaan_setup$order
+    df <- lavaan_setup$df
+    npar <- lavaan_setup$npar
+    fast_fit_spec <- NULL
   }
   
   if(TWAS){
@@ -235,17 +173,16 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
   }
   
   f <- nrow(beta_SNP)
-  use_fast_usergwas <- estimation == "DWLS" && isTRUE(getOption("GenomicSEM.fast_usergwas_fit", FALSE))
   fast_path <- if(use_fast_usergwas) "rust_usergwas_requested" else "disabled"
   fast_threads <- NA_integer_
-  fast_fallback_reason <- NULL
   LavModel1 <- NULL
-  fast_fit_spec <- NULL
   if(use_fast_usergwas){
-    fast_fit_spec <- .sem_fast_compile(parTable(ReorderModel), rownames(inspect(ReorderModel)[[1]]))
-    if(!isTRUE(fast_fit_spec$supported)){
-      fast_fallback_reason <- paste("unsupported model for Rust userGWAS fit:", fast_fit_spec$reason)
-      .fast_fallback("userGWAS", fast_fallback_reason)
+    if(is.null(fast_fit_spec)){
+      fast_fit_spec <- .sem_fast_compile(parTable(ReorderModel), rownames(inspect(ReorderModel)[[1]]))
+      if(!isTRUE(fast_fit_spec$supported)){
+        fast_fallback_reason <- paste("unsupported model for Rust userGWAS fit:", fast_fit_spec$reason)
+        .fast_fallback("userGWAS", fast_fallback_reason)
+      }
     }
   }else{
     # Run a single SNP to obtain base Lavaan model object
@@ -317,6 +254,26 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
     } else {
       fast_fallback_reason <- "native batched userGWAS fit did not return a finite converged result"
       .fast_fallback("userGWAS", fast_fallback_reason)
+      if(!is.null(native_setup)){
+        lavaan_setup <- .userGWAS_lavaan_setup(
+          model = model,
+          S_LD = S_LD,
+          V_LD = V_LD,
+          S_Full = S_Full,
+          V_full = V_full,
+          fix_measurement = fix_measurement,
+          TWAS = TWAS,
+          estimation = estimation,
+          std.lv = std.lv,
+          toler = toler
+        )
+        Model1 <- lavaan_setup$Model1
+        ReorderModel <- lavaan_setup$ReorderModel
+        order <- lavaan_setup$order
+        df <- lavaan_setup$df
+        npar <- lavaan_setup$npar
+        fast_fit_spec <- .sem_fast_compile(parTable(ReorderModel), rownames(inspect(ReorderModel)[[1]]))
+      }
     }
   } else if(use_fast_usergwas && !is.null(fast_fit_spec) && isTRUE(fast_fit_spec$supported)) {
     fast_fallback_reason <- if(smooth_check) {

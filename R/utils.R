@@ -1166,6 +1166,498 @@ Please note that this is likely effective sample size cut in half. The function 
   ifelse(is.finite(x), x, fallback)
 }
 
+.sem_fast_parse_term <- function(term) {
+  term <- trimws(term)
+  if (!nzchar(term)) {
+    return(NULL)
+  }
+
+  pieces <- strsplit(term, "*", fixed = TRUE)[[1]]
+  if (length(pieces) == 1L) {
+    return(list(variable = trimws(pieces[[1L]]), fixed = FALSE, value = NA_real_, label = ""))
+  }
+  if (length(pieces) != 2L) {
+    return(NULL)
+  }
+
+  prefix <- trimws(pieces[[1L]])
+  variable <- trimws(pieces[[2L]])
+  value <- suppressWarnings(as.numeric(prefix))
+  if (is.finite(value)) {
+    return(list(variable = variable, fixed = TRUE, value = value, label = ""))
+  }
+  list(variable = variable, fixed = FALSE, value = NA_real_, label = prefix)
+}
+
+.sem_fast_make_ptable_row <- function(lhs, op, rhs, user, free, ustart, label, est, lower = -Inf, upper = Inf) {
+  data.frame(
+    lhs = as.character(lhs),
+    op = as.character(op),
+    rhs = as.character(rhs),
+    user = as.integer(user),
+    free = as.integer(free),
+    ustart = as.numeric(ustart),
+    label = as.character(label),
+    est = as.numeric(est),
+    lower = as.numeric(lower),
+    upper = as.numeric(upper),
+    stringsAsFactors = FALSE
+  )
+}
+
+.sem_fast_renumber_free <- function(ptable) {
+  free_ids <- unique(ptable$free[ptable$free > 0L])
+  free_map <- seq_along(free_ids)
+  names(free_map) <- as.character(free_ids)
+  ptable$free <- ifelse(ptable$free > 0L, free_map[as.character(ptable$free)], 0L)
+  rownames(ptable) <- NULL
+  ptable$id <- seq_len(nrow(ptable))
+  ptable$plabel <- paste0(".p", ptable$id, ".")
+  ptable
+}
+
+.sem_fast_parse_model <- function(model, observed_names, std.lv = FALSE) {
+  observed_names <- as.character(observed_names)
+  lines <- trimws(strsplit(model, "\n", fixed = TRUE)[[1]])
+  lines <- lines[nzchar(lines)]
+  if (length(lines) == 0L) {
+    return(list(supported = FALSE, reason = "empty model"))
+  }
+
+  constraint_ops <- c(">=", "<=", ">", "<")
+  model_rows <- list()
+  constraints <- list()
+  free_next <- 1L
+
+  add_model_row <- function(lhs, op, rhs, term, user = 1L) {
+    if (is.null(term) || !nzchar(lhs) || !nzchar(rhs)) {
+      return(FALSE)
+    }
+    fixed <- isTRUE(term$fixed)
+    value <- if (fixed) term$value else NA_real_
+    free <- if (fixed) 0L else free_next
+    model_rows[[length(model_rows) + 1L]] <<- .sem_fast_make_ptable_row(
+      lhs = lhs,
+      op = op,
+      rhs = rhs,
+      user = user,
+      free = free,
+      ustart = value,
+      label = term$label,
+      est = value
+    )
+    if (!fixed) {
+      free_next <<- free_next + 1L
+    }
+    TRUE
+  }
+
+  for (line in lines) {
+    if (grepl(":=", line, fixed = TRUE) || grepl("==", line, fixed = TRUE)) {
+      return(list(supported = FALSE, reason = "defined parameters and equality constraints require lavaan"))
+    }
+
+    constraint_match <- regexec("^\\s*([^<>]+?)\\s*(>=|<=|>|<)\\s*([^<>]+?)\\s*$", line)
+    constraint_parts <- regmatches(line, constraint_match)[[1L]]
+    if (length(constraint_parts) > 0L) {
+      constraints[[length(constraints) + 1L]] <- list(
+        lhs = trimws(constraint_parts[[2L]]),
+        op = constraint_parts[[3L]],
+        rhs = trimws(constraint_parts[[4L]])
+      )
+      next
+    }
+
+    op <- if (grepl("=~", line, fixed = TRUE)) {
+      "=~"
+    } else if (grepl("~~", line, fixed = TRUE)) {
+      "~~"
+    } else if (grepl("~", line, fixed = TRUE)) {
+      "~"
+    } else {
+      return(list(supported = FALSE, reason = paste("could not parse model line:", line)))
+    }
+    parts <- strsplit(line, op, fixed = TRUE)[[1L]]
+    if (length(parts) != 2L) {
+      return(list(supported = FALSE, reason = paste("could not parse model line:", line)))
+    }
+    lhs <- trimws(parts[[1L]])
+    rhs_terms <- strsplit(parts[[2L]], "+", fixed = TRUE)[[1L]]
+    if (length(rhs_terms) == 0L) {
+      return(list(supported = FALSE, reason = paste("missing right-hand side:", line)))
+    }
+    for (rhs_term in rhs_terms) {
+      term <- .sem_fast_parse_term(rhs_term)
+      if (!add_model_row(lhs, op, term$variable, term)) {
+        return(list(supported = FALSE, reason = paste("could not parse model term:", rhs_term)))
+      }
+    }
+  }
+
+  if (length(model_rows) == 0L) {
+    return(list(supported = FALSE, reason = "no model rows"))
+  }
+  ptable <- do.call(rbind, model_rows)
+  latent_names <- unique(ptable$lhs[ptable$op == "=~"])
+  total_names <- c(observed_names, setdiff(latent_names, observed_names))
+  referenced <- unique(c(ptable$lhs, ptable$rhs))
+  if (anyNA(match(referenced, total_names))) {
+    return(list(supported = FALSE, reason = "could not map model variables"))
+  }
+
+  for (latent in latent_names) {
+    loading_rows <- which(ptable$lhs == latent & ptable$op == "=~")
+    if (length(loading_rows) == 0L) {
+      next
+    }
+    if (!std.lv && all(ptable$free[loading_rows] > 0L)) {
+      first <- loading_rows[[1L]]
+      ptable$free[first] <- 0L
+      ptable$ustart[first] <- 1
+      ptable$est[first] <- 1
+    }
+  }
+
+  for (name in total_names) {
+    if (!any(ptable$lhs == name & ptable$op == "~~" & ptable$rhs == name)) {
+      fixed_latent_var <- std.lv && name %in% latent_names
+      ptable <- rbind(
+        ptable,
+        .sem_fast_make_ptable_row(
+          lhs = name,
+          op = "~~",
+          rhs = name,
+          user = 0L,
+          free = if (fixed_latent_var) 0L else free_next,
+          ustart = if (fixed_latent_var) 1 else NA_real_,
+          label = "",
+          est = if (fixed_latent_var) 1 else NA_real_
+        )
+      )
+      if (!fixed_latent_var) {
+        free_next <- free_next + 1L
+      }
+    }
+  }
+
+  if (length(constraints) > 0L) {
+    for (constraint in constraints) {
+      lhs_value <- suppressWarnings(as.numeric(constraint$lhs))
+      rhs_value <- suppressWarnings(as.numeric(constraint$rhs))
+      if (is.finite(lhs_value) && !is.finite(rhs_value)) {
+        label <- constraint$rhs
+        bound <- lhs_value
+        op <- switch(constraint$op, ">" = "<", ">=" = "<=", "<" = ">", "<=" = ">=", constraint$op)
+      } else if (!is.finite(lhs_value) && is.finite(rhs_value)) {
+        label <- constraint$lhs
+        bound <- rhs_value
+        op <- constraint$op
+      } else {
+        return(list(supported = FALSE, reason = "unsupported parameter constraint"))
+      }
+
+      target_rows <- which(ptable$label == label & ptable$free > 0L)
+      if (length(target_rows) != 1L) {
+        return(list(supported = FALSE, reason = "could not map parameter constraint"))
+      }
+      if (op %in% c(">", ">=")) {
+        ptable$lower[target_rows] <- pmax(ptable$lower[target_rows], bound)
+      } else {
+        ptable$upper[target_rows] <- pmin(ptable$upper[target_rows], bound)
+      }
+    }
+  }
+
+  ptable <- .sem_fast_renumber_free(ptable)
+  list(supported = TRUE, ptable = ptable)
+}
+
+.sem_fast_seed_from_cov <- function(spec, S_obs) {
+  S_obs <- as.matrix(S_obs)
+  ptable <- spec$ptable
+  starts <- spec$start
+  for (row in seq_len(nrow(ptable))) {
+    free <- as.integer(ptable$free_fast[row])
+    if (free <= 0L || is.finite(starts[free]) && starts[free] != 0) {
+      next
+    }
+    lhs <- ptable$lhs[row]
+    rhs <- ptable$rhs[row]
+    op <- ptable$op[row]
+    if (op == "=~") {
+      starts[free] <- 0.5
+    } else if (op == "~~" && lhs == rhs) {
+      starts[free] <- if (lhs %in% rownames(S_obs)) {
+        max(S_obs[lhs, lhs], sqrt(.Machine$double.eps))
+      } else {
+        1
+      }
+    }
+  }
+  starts[!is.finite(starts)] <- 0
+  starts
+}
+
+.sem_fast_seed_factor_structure_from_cov <- function(spec, S_obs) {
+  S_obs <- as.matrix(S_obs)
+  starts <- spec$start
+  ptable <- spec$ptable
+  for (latent in spec$latent_names) {
+    loading_rows <- which(ptable$lhs == latent & ptable$op == "=~")
+    indicators <- ptable$rhs[loading_rows]
+    if (length(indicators) < 2L || !all(indicators %in% rownames(S_obs))) {
+      next
+    }
+    block <- S_obs[indicators, indicators, drop = FALSE]
+    eig <- tryCatch(eigen(block, symmetric = TRUE), error = function(e) NULL)
+    if (is.null(eig) || !all(is.finite(eig$values)) || !all(is.finite(eig$vectors))) {
+      next
+    }
+
+    fixed_loading_rows <- loading_rows[ptable$free_fast[loading_rows] == 0L]
+    if (length(fixed_loading_rows) == 0L) {
+      next
+    }
+    anchor_row <- fixed_loading_rows[[1L]]
+    anchor_indicator <- ptable$rhs[anchor_row]
+    anchor_idx <- match(anchor_indicator, indicators)
+    anchor_value <- .sem_fast_numeric_value(ptable$est[anchor_row], NA_real_)
+    if (!is.finite(anchor_value) || anchor_value == 0 || abs(eig$vectors[anchor_idx, 1L]) < sqrt(.Machine$double.eps)) {
+      next
+    }
+
+    lambdas <- anchor_value * eig$vectors[, 1L] / eig$vectors[anchor_idx, 1L]
+    psi <- max(eig$values[[1L]] * eig$vectors[anchor_idx, 1L]^2 / anchor_value^2, sqrt(.Machine$double.eps))
+    residuals <- diag(block) - lambdas^2 * psi
+    residuals[!is.finite(residuals) | residuals <= 0] <- sqrt(.Machine$double.eps)
+
+    for (j in seq_along(loading_rows)) {
+      free <- as.integer(ptable$free_fast[loading_rows[[j]]])
+      if (free > 0L) {
+        starts[free] <- lambdas[[j]]
+      }
+      residual_row <- which(ptable$lhs == indicators[[j]] & ptable$op == "~~" & ptable$rhs == indicators[[j]])
+      if (length(residual_row) > 0L) {
+        residual_free <- as.integer(ptable$free_fast[residual_row[[1L]]])
+        if (residual_free > 0L) {
+          starts[residual_free] <- residuals[[j]]
+        }
+      }
+    }
+
+    latent_var_row <- which(ptable$lhs == latent & ptable$op == "~~" & ptable$rhs == latent)
+    if (length(latent_var_row) > 0L) {
+      latent_free <- as.integer(ptable$free_fast[latent_var_row[[1L]]])
+      if (latent_free > 0L) {
+        starts[latent_free] <- psi
+      }
+    }
+  }
+  starts
+}
+
+.sem_fast_identity_order <- function(n_observed) {
+  seq_len(n_observed * (n_observed + 1L) / 2L)
+}
+
+.sem_fast_strip_exposure_lines <- function(model, exposure_name) {
+  lines <- strsplit(model, "\n", fixed = TRUE)[[1]]
+  lines <- lines[!grepl(exposure_name, lines, fixed = TRUE)]
+  lines <- lines[!grepl(":=", lines, fixed = TRUE)]
+  paste(lines, collapse = "\n")
+}
+
+.sem_fast_apply_measurement_fix <- function(full_ptable, no_snp_spec, no_snp_fit, exposure_name) {
+  no_snp_ptable <- no_snp_spec$ptable
+  free_fast <- as.integer(no_snp_ptable$free_fast)
+  free_rows <- free_fast > 0L
+  no_snp_ptable$est[free_rows] <- no_snp_fit$par[free_fast[free_rows]]
+  no_snp_ptable$free_fast <- NULL
+
+  fix_rows <- no_snp_ptable$lhs != no_snp_ptable$rhs
+  no_snp_ptable$free[fix_rows] <- 0L
+  no_snp_ptable$ustart[fix_rows] <- no_snp_ptable$est[fix_rows]
+
+  exposure_rows <- grepl(exposure_name, full_ptable$lhs, fixed = TRUE) |
+    grepl(exposure_name, full_ptable$rhs, fixed = TRUE)
+  exposure_ptable <- full_ptable[exposure_rows, , drop = FALSE]
+  exposure_free_rows <- which(exposure_ptable$free > 0L)
+  if (length(exposure_free_rows) > 0L) {
+    next_free <- max(c(0L, no_snp_ptable$free)) + seq_along(exposure_free_rows)
+    exposure_ptable$free[exposure_free_rows] <- next_free
+  }
+  ptable <- rbind(no_snp_ptable, exposure_ptable)
+  .sem_fast_renumber_free(ptable)
+}
+
+.sem_fast_prepare_usergwas <- function(model, S_LD, V_LD, S_Full, V_full, exposure_name,
+                                       fix_measurement, std.lv, toler) {
+  full_names <- rownames(S_Full)
+  parsed_full <- .sem_fast_parse_model(model, full_names, std.lv = std.lv)
+  if (!isTRUE(parsed_full$supported)) {
+    return(parsed_full)
+  }
+
+  ptable <- parsed_full$ptable
+  if (fix_measurement) {
+    no_snp_model <- .sem_fast_strip_exposure_lines(model, exposure_name)
+    parsed_no_snp <- .sem_fast_parse_model(no_snp_model, colnames(S_LD), std.lv = std.lv)
+    if (!isTRUE(parsed_no_snp$supported)) {
+      return(parsed_no_snp)
+    }
+    no_snp_spec <- .sem_fast_compile(parsed_no_snp$ptable, colnames(S_LD))
+    if (!isTRUE(no_snp_spec$supported)) {
+      return(no_snp_spec)
+    }
+    no_snp_spec$start <- .sem_fast_seed_factor_structure_from_cov(no_snp_spec, S_LD)
+    no_snp_spec$start <- .sem_fast_seed_from_cov(no_snp_spec, S_LD)
+    no_snp_order <- .sem_fast_identity_order(ncol(S_LD))
+    no_snp_fit <- .sem_fit_fast(
+      S_LD,
+      V_LD[no_snp_order, no_snp_order, drop = FALSE],
+      1 / diag(V_LD)[no_snp_order],
+      no_snp_spec,
+      max_iter = getOption("GenomicSEM.fast_usergwas_max_iter", 100L),
+      tol = getOption("GenomicSEM.fast_usergwas_tol", 1e-10)
+    )
+    if (is.null(no_snp_fit) || !isTRUE(no_snp_fit$converged) || !all(is.finite(no_snp_fit$par))) {
+      return(list(supported = FALSE, reason = "native no-SNP measurement fit did not converge"))
+    }
+    ptable <- .sem_fast_apply_measurement_fix(ptable, no_snp_spec, no_snp_fit, exposure_name)
+  }
+
+  spec <- .sem_fast_compile(ptable, full_names)
+  if (!isTRUE(spec$supported)) {
+    return(spec)
+  }
+  spec$start <- .sem_fast_seed_factor_structure_from_cov(spec, S_Full)
+  spec$start <- .sem_fast_seed_from_cov(spec, S_Full)
+  order <- .sem_fast_identity_order(length(full_names))
+  warm_fit <- .sem_fit_fast(
+    S_Full,
+    V_full[order, order, drop = FALSE],
+    1 / diag(V_full)[order],
+    spec,
+    max_iter = getOption("GenomicSEM.fast_usergwas_max_iter", 100L),
+    tol = getOption("GenomicSEM.fast_usergwas_tol", 1e-10)
+  )
+  if (is.null(warm_fit) || !isTRUE(warm_fit$converged) || !all(is.finite(warm_fit$par))) {
+    return(list(supported = FALSE, reason = "native first-SNP warm start did not converge"))
+  }
+  spec$start <- warm_fit$par
+
+  npar <- length(spec$start)
+  df <- length(order) - npar
+  list(supported = TRUE, spec = spec, order = order, df = df, npar = npar)
+}
+
+.userGWAS_lavaan_setup <- function(model, S_LD, V_LD, S_Full, V_full, fix_measurement,
+                                   TWAS, estimation, std.lv, toler) {
+  Model1 <- model
+  if (fix_measurement) {
+    lines <- strsplit(model, "\n", fixed = TRUE)[[1]]
+    if (TWAS) {
+      filtered_lines <- lines[!grepl("Gene", lines, fixed = TRUE)]
+    } else {
+      filtered_lines <- lines[!grepl("SNP", lines, fixed = TRUE)]
+    }
+    filtered_lines <- filtered_lines[!grepl(":=", filtered_lines, fixed = TRUE)]
+    noSNPmodel <- paste(filtered_lines, collapse = "\n")
+
+    W <- solve(V_LD, tol = toler)
+    ReorderModelnoSNP <- sem(
+      noSNPmodel,
+      sample.cov = S_LD,
+      estimator = "DWLS",
+      se = "standard",
+      WLS.V = W,
+      sample.nobs = 2,
+      optim.dx.tol = .01,
+      optim.force.converged = TRUE,
+      control = list(iter.max = 1),
+      std.lv = std.lv
+    )
+
+    order_no_snp <- .rearrange(k = ncol(S_LD), fit = ReorderModelnoSNP, names = colnames(S_LD))
+    V_Reorder <- V_LD[order_no_snp, order_no_snp]
+    W_Reorder <- diag(nrow(V_Reorder))
+    diag(W_Reorder) <- diag(V_Reorder)
+    W_Reorder <- solve(W_Reorder, tol = toler)
+
+    if (estimation == "DWLS") {
+      Model1_Results <- sem(
+        noSNPmodel,
+        sample.cov = S_LD,
+        se = "standard",
+        estimator = "DWLS",
+        WLS.V = W_Reorder,
+        sample.nobs = 2,
+        optim.dx.tol = .01,
+        std.lv = std.lv
+      )
+    } else {
+      Model1_Results <- sem(
+        noSNPmodel,
+        sample.cov = S_LD,
+        estimator = "ML",
+        sample.nobs = 200,
+        optim.dx.tol = .01,
+        sample.cov.rescale = FALSE,
+        std.lv = std.lv
+      )
+    }
+
+    Model1 <- parTable(Model1_Results)
+    Model1$free <- ifelse(Model1$lhs != Model1$rhs, 0, Model1$free)
+    Model1$ustart <- ifelse(is.na(Model1$ustart), 0, Model1$ustart)
+  }
+
+  W <- solve(V_full, tol = toler)
+  ReorderModel <- sem(
+    model,
+    sample.cov = S_Full,
+    estimator = "DWLS",
+    se = "standard",
+    WLS.V = W,
+    sample.nobs = 2,
+    optim.dx.tol = .01,
+    optim.force.converged = TRUE,
+    control = list(iter.max = 1),
+    std.lv = std.lv
+  )
+
+  if (fix_measurement) {
+    withSNP <- parTable(ReorderModel)
+    exposure_rows <- if (TWAS) {
+      withSNP$rhs == "Gene" | withSNP$lhs == "Gene"
+    } else {
+      withSNP$rhs == "SNP" | withSNP$lhs == "SNP"
+    }
+    extra_rows <- exposure_rows | withSNP$op == ":=" | withSNP$op %in% c("==", "<", ">", "<=", ">=")
+    Model1 <- rbind(Model1, withSNP[extra_rows, , drop = FALSE])
+    ReorderModel <- sem(
+      Model1,
+      sample.cov = S_Full,
+      estimator = "DWLS",
+      se = "standard",
+      WLS.V = W,
+      sample.nobs = 2,
+      optim.dx.tol = .01,
+      optim.force.converged = TRUE,
+      control = list(iter.max = 1),
+      std.lv = std.lv
+    )
+  }
+
+  list(
+    Model1 = Model1,
+    ReorderModel = ReorderModel,
+    order = .rearrange(k = ncol(S_Full), fit = ReorderModel, names = rownames(S_Full)),
+    df = suppressWarnings(lavInspect(ReorderModel, "fit")["df"]),
+    npar = suppressWarnings(lavInspect(ReorderModel, "fit")["npar"])
+  )
+}
+
 .sem_fast_compile <- function(ptable, observed_names) {
   constraint_ops <- c(">", ">=", "<", "<=")
   model_rows <- !(ptable$op %in% c(constraint_ops, "da"))

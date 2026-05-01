@@ -55,14 +55,11 @@ constrained_inputs$model <- paste(
   sep = "\n"
 )
 
-bound_spec <- getFromNamespace(".sem_fast_compile", "GenomicSEM")(
-  lavaan::lavaanify(
-    "F1 =~ T1 + T2 + T3\nT1 ~~ theta*T1\ntheta > 0.001",
-    auto.var = TRUE,
-    auto.fix.first = TRUE
-  ),
+bound_ptable <- getFromNamespace(".sem_fast_parse_model", "GenomicSEM")(
+  "F1 =~ T1 + T2 + T3\nT1 ~~ theta*T1\ntheta > 0.001",
   paste0("T", 1:3)
-)
+)$ptable
+bound_spec <- getFromNamespace(".sem_fast_compile", "GenomicSEM")(bound_ptable, paste0("T", 1:3))
 stopifnot(isTRUE(bound_spec$supported))
 stopifnot(any(abs(bound_spec$lower - 0.001) < .Machine$double.eps^0.5))
 
@@ -149,3 +146,23 @@ compare_runs(TRUE)
 compare_runs(FALSE, constrained_inputs)
 compare_runs(TRUE, constrained_inputs)
 compare_sub_runs()
+
+assert_native_setup_skips_lavaan <- function() {
+  trace("sem", where = asNamespace("lavaan"), tracer = quote(stop("unexpected lavaan setup")), print = FALSE)
+  on.exit(untrace("sem", where = asNamespace("lavaan")), add = TRUE)
+
+  old_options <- options(
+    GenomicSEM.fast_usergwas_fit = TRUE,
+    GenomicSEM.fast_usergwas_native_setup = TRUE,
+    GenomicSEM.fast_strict = TRUE
+  )
+  on.exit(options(old_options), add = TRUE)
+
+  fast <- NULL
+  invisible(capture.output({
+    fast <- run_usergwas(TRUE, q_snp = TRUE)
+  }))
+  stopifnot(identical(attr(fast, "GenomicSEM.fast_path"), "rust_usergwas_batch"))
+}
+
+assert_native_setup_skips_lavaan()
