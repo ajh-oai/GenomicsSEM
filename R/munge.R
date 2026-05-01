@@ -59,7 +59,23 @@ munge <- function(files,hm3,trait.names=NULL,N=NULL,info.filter = .9,maf.filter=
   }
   .LOG("Reading in reference file",file=log.file)
   ref <- fread(hm3,header=T,data.table=F)
-  if (!parallel) {
+  batch_result <- .munge_fused_batch_fast(
+    filenames = filenames,
+    trait.names = trait.names,
+    N = N,
+    ref = ref,
+    hm3 = hm3,
+    info.filter = info.filter,
+    maf.filter = maf.filter,
+    column.names = column.names,
+    overwrite = overwrite,
+    parallel = parallel,
+    cores = cores,
+    log.file = log.file
+  )
+  if (!is.null(batch_result)) {
+    .fast_note("munge", sprintf("using batched Rust prep with %d thread(s)", batch_result$threads))
+  } else if (!parallel) {
     .LOG("Reading summary statistics for ", paste(files,collapse=" "), ". Please note that this step usually takes a few minutes due to the size of summary statistic files.", file=log.file)
     for(i in 1:length(filenames)){
       .munge_main(i, NULL, NULL, filenames[i], trait.names[i], N[i], ref, hm3, info.filter, maf.filter, column.names, overwrite, log.file)

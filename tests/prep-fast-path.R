@@ -296,6 +296,66 @@ check_munge_fused_engine <- function() {
     stopifnot(identical(fallback$A1, fused$A1))
     stopifnot(identical(fallback$A2, fused$A2))
     stopifnot(max(abs(fallback$Z - fused$Z), na.rm = TRUE) < 1e-5)
+    stopifnot(!file.exists("trait_fused.sumstats"))
+  })
+}
+
+check_munge_fused_batch_engine <- function() {
+  with_temp_cwd({
+    ref <- make_ref()
+    ss1 <- make_sumstats()
+    ss2 <- make_sumstats()
+    hm3 <- ref[, c("SNP", "A1", "A2")]
+    write.table(hm3, "hm3.txt", row.names = FALSE, quote = FALSE)
+    write.table(ss1, gzfile("trait1.txt.gz"), row.names = FALSE, quote = FALSE)
+    write.table(ss2, gzfile("trait2.txt.gz"), row.names = FALSE, quote = FALSE)
+
+    old <- options(
+      GenomicSEM.fast_table_read = FALSE,
+      GenomicSEM.fast_snp_join = FALSE,
+      GenomicSEM.fast_munge_qc = FALSE,
+      GenomicSEM.fast_munge_engine = FALSE,
+      GenomicSEM.fast_munge_threads = NULL
+    )
+    on.exit(options(old), add = TRUE)
+
+    suppressWarnings(munge(
+      files = c("trait1.txt.gz", "trait2.txt.gz"),
+      hm3 = "hm3.txt",
+      trait.names = c("trait1_slow", "trait2_slow"),
+      parallel = FALSE,
+      overwrite = TRUE,
+      column.names = list(effect = "BETA")
+    ))
+    fallback1 <- read.table(gzfile("trait1_slow.sumstats.gz"), header = TRUE)
+    fallback2 <- read.table(gzfile("trait2_slow.sumstats.gz"), header = TRUE)
+
+    options(
+      GenomicSEM.fast_munge_engine = TRUE,
+      GenomicSEM.fast_munge_threads = 2L
+    )
+    suppressWarnings(munge(
+      files = c("trait1.txt.gz", "trait2.txt.gz"),
+      hm3 = "hm3.txt",
+      trait.names = c("trait1_fast", "trait2_fast"),
+      parallel = TRUE,
+      cores = 2L,
+      overwrite = TRUE,
+      column.names = list(effect = "BETA")
+    ))
+    fast1 <- read.table(gzfile("trait1_fast.sumstats.gz"), header = TRUE)
+    fast2 <- read.table(gzfile("trait2_fast.sumstats.gz"), header = TRUE)
+
+    stopifnot(identical(fallback1$SNP, fast1$SNP))
+    stopifnot(identical(fallback2$SNP, fast2$SNP))
+    stopifnot(identical(fallback1$N, fast1$N))
+    stopifnot(identical(fallback2$N, fast2$N))
+    stopifnot(max(abs(fallback1$Z - fast1$Z), na.rm = TRUE) < 1e-5)
+    stopifnot(max(abs(fallback2$Z - fast2$Z), na.rm = TRUE) < 1e-5)
+    stopifnot(file.exists("trait1_fast_munge.log"))
+    stopifnot(file.exists("trait2_fast_munge.log"))
+    stopifnot(!file.exists("trait1_fast.sumstats"))
+    stopifnot(!file.exists("trait2_fast.sumstats"))
   })
 }
 
@@ -405,6 +465,7 @@ check_sumstats_fast_reader()
 check_sumstats_fused_engine()
 check_munge_fast_reader()
 check_munge_fused_engine()
+check_munge_fused_batch_engine()
 check_ldsc_fast_reader()
 check_ldsc_full_fast_reader()
 

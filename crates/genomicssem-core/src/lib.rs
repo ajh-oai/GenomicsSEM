@@ -34,8 +34,8 @@ pub const SUMSTATS_QC_COUNT_LEN: usize = 10;
 
 mod prep;
 pub use prep::{
-    munge_fused, sumstats_fused, MungeFusedReport, SumstatsFusedOutput, SumstatsFusedReport,
-    MUNGE_FUSED_COLS, SUMSTATS_FUSED_COLS,
+    munge_fused, munge_fused_batch, sumstats_fused, MungeFusedInput, MungeFusedReport,
+    SumstatsFusedOutput, SumstatsFusedReport, MUNGE_FUSED_COLS, SUMSTATS_FUSED_COLS,
 };
 
 #[inline]

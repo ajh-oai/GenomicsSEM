@@ -3,8 +3,9 @@
 use genomicssem_core::{
     fill_s_full, fill_v_full, fill_v_snp, fill_v_snp_batch, fill_z_pre, fit_commonfactor_batch,
     fit_commonfactor_main, fit_commonfactor_q, fit_generic_sem, fit_generic_sem_batch,
-    ldsc_block_products, munge_fused, munge_qc, sumstats_fused, sumstats_qc, GenomicControl,
-    KernelError, MungeQcOutput, SumstatsFusedOutput, SumstatsQcOutput,
+    ldsc_block_products, munge_fused, munge_fused_batch, munge_qc, sumstats_fused, sumstats_qc,
+    GenomicControl, KernelError, MungeFusedInput, MungeQcOutput, SumstatsFusedOutput,
+    SumstatsQcOutput,
 };
 use std::ffi::CStr;
 use std::os::raw::c_char;
@@ -767,6 +768,103 @@ pub unsafe extern "C" fn genomicssem_munge_fused(
         *rows_joined = report.rows_joined;
         *rows_written = report.rows_written;
         *unsupported = i32::from(report.unsupported);
+        Ok(())
+    })();
+
+    result.map(|()| OK).unwrap_or_else(code)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn genomicssem_munge_fused_batch(
+    filenames: *const *const c_char,
+    output_paths: *const *const c_char,
+    file_count: usize,
+    ref_snp: *const *const c_char,
+    ref_len: usize,
+    ref_a1: *const i32,
+    ref_a1_len: usize,
+    ref_a2: *const i32,
+    ref_a2_len: usize,
+    col_indices: *const i32,
+    col_indices_nrow: usize,
+    col_indices_ncol: usize,
+    provided_n: *const f64,
+    provided_n_len: usize,
+    n_multipliers: *const f64,
+    n_multipliers_len: usize,
+    info_filter: f64,
+    maf_filter: f64,
+    n_threads: usize,
+    out_counts: *mut i32,
+    out_counts_len: usize,
+    out_rows: *mut usize,
+    out_rows_len: usize,
+    unsupported: *mut i32,
+    unsupported_len: usize,
+) -> i32 {
+    let result = (|| {
+        let filenames = checked_cstrs(filenames, file_count)?;
+        let output_paths = checked_cstrs(output_paths, file_count)?;
+        let ref_snp = checked_cstrs(ref_snp, ref_len)?;
+        let ref_a1 = checked_slice(ref_a1, ref_a1_len)?;
+        let ref_a2 = checked_slice(ref_a2, ref_a2_len)?;
+        let col_indices = checked_slice(col_indices, col_indices_nrow * col_indices_ncol)?;
+        let provided_n = checked_slice(provided_n, provided_n_len)?;
+        let n_multipliers = checked_slice(n_multipliers, n_multipliers_len)?;
+        let out_counts = checked_slice_mut(out_counts, out_counts_len)?;
+        let out_rows = checked_slice_mut(out_rows, out_rows_len)?;
+        let unsupported = checked_slice_mut(unsupported, unsupported_len)?;
+
+        if output_paths.len() != file_count
+            || provided_n.len() != file_count
+            || n_multipliers.len() != file_count
+            || col_indices_nrow != file_count
+            || col_indices_ncol < genomicssem_core::MUNGE_FUSED_COLS
+            || out_counts.len() < file_count * genomicssem_core::MUNGE_QC_COUNT_LEN
+            || out_rows.len() < file_count * 3
+            || unsupported.len() < file_count
+        {
+            return Err(KernelError::BadDimensions);
+        }
+
+        let mut per_file_col_indices = Vec::with_capacity(file_count);
+        for file_i in 0..file_count {
+            let mut file_cols = Vec::with_capacity(col_indices_ncol);
+            for col_i in 0..col_indices_ncol {
+                file_cols.push(col_indices[file_i + col_i * col_indices_nrow]);
+            }
+            per_file_col_indices.push(file_cols);
+        }
+
+        let inputs: Vec<_> = (0..file_count)
+            .map(|file_i| MungeFusedInput {
+                filename: filenames[file_i],
+                output_path: output_paths[file_i],
+                col_indices: per_file_col_indices[file_i].as_slice(),
+                provided_n: provided_n[file_i].is_finite().then_some(provided_n[file_i]),
+                n_multiplier: n_multipliers[file_i],
+            })
+            .collect();
+
+        let reports = munge_fused_batch(
+            &inputs,
+            &ref_snp,
+            ref_a1,
+            ref_a2,
+            info_filter,
+            maf_filter,
+            n_threads,
+        )?;
+
+        for (file_i, report) in reports.iter().enumerate() {
+            for count_i in 0..genomicssem_core::MUNGE_QC_COUNT_LEN {
+                out_counts[file_i + count_i * file_count] = report.counts[count_i];
+            }
+            out_rows[file_i] = report.rows_total;
+            out_rows[file_i + file_count] = report.rows_joined;
+            out_rows[file_i + 2 * file_count] = report.rows_written;
+            unsupported[file_i] = i32::from(report.unsupported);
+        }
         Ok(())
     })();
 

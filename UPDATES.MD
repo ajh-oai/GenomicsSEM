@@ -20,6 +20,8 @@ unsupported inputs.
 ### Summary-stat preparation and LDSC setup
 
 - Added native Rust prep engines for supported `munge()` and `sumstats()` inputs.
+- Added batched native `munge()` orchestration for multiple files, sharing one reference index and
+  parallelizing compressed output when multiple Rust worker threads are requested.
 - Added faster table ingestion and native QC/transformation kernels for supported prep paths.
 - Added faster `ldsc()` / `s_ldsc()` readers plus a Rust LDSC block-crossproduct kernel.
 

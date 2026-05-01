@@ -1331,3 +1331,49 @@ Interpretation:
   100-SNP/12-trait `Q_SNP=TRUE` synthetic run.
 - The larger point is dependency removal rather than the startup win: supported Rust-backed
   `userGWAS()` runs no longer need lavaan at all on their execution path.
+
+## 2026-05-01 12:57 PDT - Batched `munge()` orchestration and compressed output
+
+Profile:
+
+- On one 100k-SNP synthetic file, the existing fused native prep work took a median `0.048s`,
+  while the follow-up R gzip pass took a median `0.141s`.
+- Direct Rust gzip with the default `miniz_oxide` backend was slower for one file
+  (`0.332s` median). Switching `flate2` to the SIMD-accelerated `zlib-rs` backend helped but still
+  did not beat the existing single-file plain-write + R-gzip path, so single-file behavior stays on
+  the old faster compression route.
+
+Change:
+
+- Added batched native `munge()` orchestration for supported multi-file inputs.
+- The batch path builds one shared reference index, fans files out over Rust worker threads, and
+  writes gzip output directly only when multiple native workers are active so compression can run
+  concurrently across files.
+- Added `options(GenomicSEM.fast_munge_threads=...)` plus `benches/bench_munge_batch.R`.
+
+Validation:
+
+```sh
+cargo test --workspace
+R CMD INSTALL --install-tests .
+Rscript tests/prep-fast-path.R
+Rscript benches/bench_munge_batch.R 100000 4 4 13
+Rscript benches/bench_prep_fast_paths.R 100000 4 1 200 13
+```
+
+Local 4-file / 100k-SNP benchmark:
+
+| backend | threads | elapsed_sec | checksum |
+|---|---:|---:|---:|
+| `legacy_serial` | 1 | 3.438 | 4000669437 |
+| `legacy_parallel` | 4 | 2.432 | 4000669437 |
+| `native_batch_1t` | 1 | 0.775 | 4000669437 |
+| `native_batch_threads` | 4 | 0.362 | 4000669437 |
+
+Interpretation:
+
+- Against the original serial path, batched native `munge()` is `4.4x` faster at one thread and
+  `9.5x` faster with four Rust workers on this synthetic multi-file workload.
+- Against the existing R PSOCK parallel path, the 4-thread native batch path is `6.7x` faster here.
+- The implementation intentionally keeps the faster old single-file compression route while using
+  direct native gzip only where multi-file parallelism makes it worthwhile.

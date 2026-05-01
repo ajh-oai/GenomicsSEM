@@ -2,7 +2,8 @@ use crate::{
     munge_qc, sumstats_qc, KernelError, KernelResult, MungeQcOutput, SumstatsQcOutput,
     MUNGE_QC_COUNT_LEN, SUMSTATS_QC_COUNT_LEN,
 };
-use flate2::read::GzDecoder;
+use flate2::{read::GzDecoder, write::GzEncoder, Compression};
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -99,6 +100,15 @@ pub struct SumstatsFusedOutput<'a> {
     pub se: &'a mut [f64],
 }
 
+#[derive(Clone, Debug)]
+pub struct MungeFusedInput<'a> {
+    pub filename: &'a str,
+    pub output_path: &'a str,
+    pub col_indices: &'a [i32],
+    pub provided_n: Option<f64>,
+    pub n_multiplier: f64,
+}
+
 fn open_text_reader(path: &str) -> KernelResult<Box<dyn BufRead>> {
     let file = File::open(path).map_err(|_| KernelError::BadDimensions)?;
     if path.to_ascii_lowercase().ends_with(".gz") {
@@ -169,13 +179,72 @@ fn required_indices_present(col_indices: &[i32], required: &[usize]) -> bool {
         .all(|col| col_index(col_indices, *col).is_some())
 }
 
+fn build_ref_map<'a>(ref_snps: &'a [&'a str]) -> Option<HashMap<&'a str, usize>> {
+    let mut ref_map = HashMap::with_capacity(ref_snps.len());
+    for (idx, snp) in ref_snps.iter().enumerate() {
+        if snp.is_empty() || ref_map.insert(*snp, idx).is_some() {
+            return None;
+        }
+    }
+    Some(ref_map)
+}
+
+fn write_munge_rows<W: Write>(
+    writer: &mut W,
+    candidates: &[MungeCandidate],
+    keep: &[i32],
+    z: &[f64],
+    out_n: usize,
+) -> KernelResult<()> {
+    writeln!(writer, "SNP\tN\tZ\tA1\tA2").map_err(|_| KernelError::BadDimensions)?;
+    for out_idx in 0..out_n {
+        let row_idx = (keep[out_idx] - 1) as usize;
+        let row = &candidates[row_idx];
+        writeln!(
+            writer,
+            "{}\t{}\t{}\t{}\t{}",
+            row.snp,
+            row.n,
+            z[out_idx],
+            allele_label(row.a1_ref),
+            allele_label(row.a2_ref)
+        )
+        .map_err(|_| KernelError::BadDimensions)?;
+    }
+    Ok(())
+}
+
+fn write_munge_output(
+    output_path: &str,
+    candidates: &[MungeCandidate],
+    keep: &[i32],
+    z: &[f64],
+    out_n: usize,
+) -> KernelResult<()> {
+    let out_file = File::create(output_path).map_err(|_| KernelError::BadDimensions)?;
+    if output_path.to_ascii_lowercase().ends_with(".gz") {
+        let writer = BufWriter::new(out_file);
+        let mut encoder = GzEncoder::new(writer, Compression::fast());
+        write_munge_rows(&mut encoder, candidates, keep, z, out_n)?;
+        let mut writer = encoder.finish().map_err(|_| KernelError::BadDimensions)?;
+        writer.flush().map_err(|_| KernelError::BadDimensions)?;
+        return Ok(());
+    }
+
+    let mut writer = BufWriter::new(out_file);
+    write_munge_rows(&mut writer, candidates, keep, z, out_n)?;
+    writer.flush().map_err(|_| KernelError::BadDimensions)?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
-pub fn munge_fused(
+fn munge_fused_with_ref_map(
     filename: &str,
     output_path: &str,
     ref_snps: &[&str],
     ref_a1: &[i32],
     ref_a2: &[i32],
+    ref_map: &HashMap<&str, usize>,
     col_indices: &[i32],
     provided_n: Option<f64>,
     n_multiplier: f64,
@@ -192,16 +261,6 @@ pub fn munge_fused(
             unsupported: true,
             ..MungeFusedReport::default()
         });
-    }
-
-    let mut ref_map = HashMap::with_capacity(ref_snps.len());
-    for (idx, snp) in ref_snps.iter().enumerate() {
-        if snp.is_empty() || ref_map.insert(*snp, idx).is_some() {
-            return Ok(MungeFusedReport {
-                unsupported: true,
-                ..MungeFusedReport::default()
-            });
-        }
     }
 
     let snp_idx = col_index(col_indices, SNP_COL);
@@ -318,28 +377,94 @@ pub fn munge_fused(
         },
     )?;
 
-    let out_file = File::create(output_path).map_err(|_| KernelError::BadDimensions)?;
-    let mut writer = BufWriter::new(out_file);
-    writeln!(writer, "SNP\tN\tZ\tA1\tA2").map_err(|_| KernelError::BadDimensions)?;
-    for out_idx in 0..out_n {
-        let row_idx = (keep[out_idx] - 1) as usize;
-        let row = &candidates[row_idx];
-        writeln!(
-            writer,
-            "{}\t{}\t{}\t{}\t{}",
-            row.snp,
-            row.n,
-            z[out_idx],
-            allele_label(row.a1_ref),
-            allele_label(row.a2_ref)
-        )
-        .map_err(|_| KernelError::BadDimensions)?;
-    }
-
-    writer.flush().map_err(|_| KernelError::BadDimensions)?;
+    write_munge_output(output_path, &candidates, &keep, &z, out_n)?;
     report.rows_written = out_n;
     report.counts = counts;
     Ok(report)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn munge_fused(
+    filename: &str,
+    output_path: &str,
+    ref_snps: &[&str],
+    ref_a1: &[i32],
+    ref_a2: &[i32],
+    col_indices: &[i32],
+    provided_n: Option<f64>,
+    n_multiplier: f64,
+    info_filter: f64,
+    maf_filter: f64,
+) -> KernelResult<MungeFusedReport> {
+    let Some(ref_map) = build_ref_map(ref_snps) else {
+        return Ok(MungeFusedReport {
+            unsupported: true,
+            ..MungeFusedReport::default()
+        });
+    };
+
+    munge_fused_with_ref_map(
+        filename,
+        output_path,
+        ref_snps,
+        ref_a1,
+        ref_a2,
+        &ref_map,
+        col_indices,
+        provided_n,
+        n_multiplier,
+        info_filter,
+        maf_filter,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn munge_fused_batch(
+    inputs: &[MungeFusedInput<'_>],
+    ref_snps: &[&str],
+    ref_a1: &[i32],
+    ref_a2: &[i32],
+    info_filter: f64,
+    maf_filter: f64,
+    n_threads: usize,
+) -> KernelResult<Vec<MungeFusedReport>> {
+    if n_threads == 0 {
+        return Err(KernelError::BadDimensions);
+    }
+    let Some(ref_map) = build_ref_map(ref_snps) else {
+        return Ok(inputs
+            .iter()
+            .map(|_| MungeFusedReport {
+                unsupported: true,
+                ..MungeFusedReport::default()
+            })
+            .collect());
+    };
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(n_threads)
+        .build()
+        .map_err(|_| KernelError::ThreadPoolBuild)?;
+    pool.install(|| {
+        inputs
+            .par_iter()
+            .map(|input| {
+                munge_fused_with_ref_map(
+                    input.filename,
+                    input.output_path,
+                    ref_snps,
+                    ref_a1,
+                    ref_a2,
+                    &ref_map,
+                    input.col_indices,
+                    input.provided_n,
+                    input.n_multiplier,
+                    info_filter,
+                    maf_filter,
+                )
+            })
+            .collect()
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

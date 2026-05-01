@@ -989,6 +989,109 @@ SEXP genomicssem_munge_fused_call(
   return out;
 }
 
+SEXP genomicssem_munge_fused_batch_call(
+    SEXP filenames_,
+    SEXP output_paths_,
+    SEXP ref_snp_,
+    SEXP ref_a1_,
+    SEXP ref_a2_,
+    SEXP col_indices_,
+    SEXP provided_n_,
+    SEXP n_multipliers_,
+    SEXP info_filter_,
+    SEXP maf_filter_,
+    SEXP n_threads_) {
+  int nprotect = 0;
+  SEXP filenames = protect_string_vector(filenames_, "filenames", &nprotect);
+  SEXP output_paths = protect_string_vector(output_paths_, "output_paths", &nprotect);
+  SEXP ref_snp = protect_string_vector(ref_snp_, "ref$SNP", &nprotect);
+  SEXP ref_a1 = protect_int_vector(ref_a1_, "ref$A1", &nprotect);
+  SEXP ref_a2 = protect_int_vector(ref_a2_, "ref$A2", &nprotect);
+  SEXP col_indices = protect_int_matrix(col_indices_, "col_indices", &nprotect);
+  SEXP provided_n = protect_real_vector(provided_n_, "provided_n", &nprotect);
+  SEXP n_multipliers = protect_real_vector(n_multipliers_, "n_multipliers", &nprotect);
+
+  R_xlen_t file_count = XLENGTH(filenames);
+  if (XLENGTH(output_paths) != file_count ||
+      XLENGTH(provided_n) != file_count ||
+      XLENGTH(n_multipliers) != file_count) {
+    Rf_error("batched munge inputs must have the same file count");
+  }
+
+  R_xlen_t ref_len = XLENGTH(ref_snp);
+  if (XLENGTH(ref_a1) != ref_len || XLENGTH(ref_a2) != ref_len) {
+    Rf_error("reference SNP and allele vectors must have the same length");
+  }
+
+  size_t col_nrow, col_ncol;
+  matrix_dims(col_indices, "col_indices", &col_nrow, &col_ncol);
+  if (col_nrow != (size_t)file_count) {
+    Rf_error("'col_indices' must have one row per file");
+  }
+
+  int n_threads = scalar_int(n_threads_, "n_threads");
+  if (n_threads <= 0) {
+    Rf_error("'n_threads' must be positive");
+  }
+
+  SEXP counts = PROTECT(Rf_allocMatrix(INTSXP, (int)file_count, 8));
+  SEXP rows = PROTECT(Rf_allocMatrix(REALSXP, (int)file_count, 3));
+  SEXP unsupported = PROTECT(Rf_allocVector(LGLSXP, file_count));
+  nprotect += 3;
+
+  size_t *rows_buf = (size_t *)R_alloc((size_t)file_count * 3, sizeof(size_t));
+  int *unsupported_buf = (int *)R_alloc((size_t)file_count, sizeof(int));
+
+  int status = genomicssem_munge_fused_batch(
+      string_ptrs(filenames),
+      string_ptrs(output_paths),
+      (size_t)file_count,
+      string_ptrs(ref_snp),
+      (size_t)ref_len,
+      INTEGER(ref_a1),
+      (size_t)XLENGTH(ref_a1),
+      INTEGER(ref_a2),
+      (size_t)XLENGTH(ref_a2),
+      INTEGER(col_indices),
+      col_nrow,
+      col_ncol,
+      REAL(provided_n),
+      (size_t)XLENGTH(provided_n),
+      REAL(n_multipliers),
+      (size_t)XLENGTH(n_multipliers),
+      scalar_real(info_filter_, "info.filter"),
+      scalar_real(maf_filter_, "maf.filter"),
+      (size_t)n_threads,
+      INTEGER(counts),
+      (size_t)XLENGTH(counts),
+      rows_buf,
+      (size_t)file_count * 3,
+      unsupported_buf,
+      (size_t)file_count);
+
+  check_status(status, "genomicssem_munge_fused_batch");
+  for (R_xlen_t i = 0; i < file_count * 3; ++i) {
+    REAL(rows)[i] = (double)rows_buf[i];
+  }
+  for (R_xlen_t i = 0; i < file_count; ++i) {
+    LOGICAL(unsupported)[i] = unsupported_buf[i];
+  }
+
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 3));
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 3));
+  nprotect += 2;
+  SET_VECTOR_ELT(out, 0, counts);
+  SET_VECTOR_ELT(out, 1, rows);
+  SET_VECTOR_ELT(out, 2, unsupported);
+  SET_STRING_ELT(names, 0, Rf_mkChar("counts"));
+  SET_STRING_ELT(names, 1, Rf_mkChar("rows"));
+  SET_STRING_ELT(names, 2, Rf_mkChar("unsupported"));
+  Rf_setAttrib(out, R_NamesSymbol, names);
+
+  UNPROTECT(nprotect);
+  return out;
+}
+
 SEXP genomicssem_sumstats_qc_call(
     SEXP a1_ref_,
     SEXP a2_ref_,

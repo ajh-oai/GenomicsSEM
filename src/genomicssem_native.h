@@ -276,6 +276,33 @@ int genomicssem_munge_fused(
     size_t *rows_written,
     int *unsupported);
 
+int genomicssem_munge_fused_batch(
+    const char **filenames,
+    const char **output_paths,
+    size_t file_count,
+    const char **ref_snp,
+    size_t ref_len,
+    const int *ref_a1,
+    size_t ref_a1_len,
+    const int *ref_a2,
+    size_t ref_a2_len,
+    const int *col_indices,
+    size_t col_indices_nrow,
+    size_t col_indices_ncol,
+    const double *provided_n,
+    size_t provided_n_len,
+    const double *n_multipliers,
+    size_t n_multipliers_len,
+    double info_filter,
+    double maf_filter,
+    size_t n_threads,
+    int *out_counts,
+    size_t out_counts_len,
+    size_t *out_rows,
+    size_t out_rows_len,
+    int *unsupported,
+    size_t unsupported_len);
+
 int genomicssem_sumstats_qc(
     const int *a1_ref,
     const int *a2_ref,

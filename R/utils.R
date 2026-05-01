@@ -568,8 +568,8 @@ return(S_Full)
   as.integer(unname(out))
 }
 
-.munge_fused_fast <- function(filename, trait.name, N, ref, hm3, info.filter, maf.filter,
-                              column.names, overwrite, log.file, utilfuncs = NULL) {
+.munge_fused_prepare <- function(filename, trait.name, N, ref, hm3, info.filter, maf.filter,
+                                 column.names, overwrite, log.file, utilfuncs = NULL) {
   if (!.genomicssem_use_rust() || !isTRUE(getOption("GenomicSEM.fast_munge_engine", TRUE))) {
     return(NULL)
   }
@@ -617,19 +617,71 @@ Please note that this is likely effective sample size cut in half. The function 
   col_indices <- .prep_col_indices(hold_names, c("SNP", "A1", "A2", "effect", "P", "N", "INFO", "MAF"))
 
   trait.name <- str_replace_all(trait.name, fixed(" "), "")
-  output_file <- paste0(trait.name, ".sumstats")
+  output_base <- paste0(trait.name, ".sumstats")
+  output_file <- paste0(output_base, ".gz")
+  if (!isTRUE(overwrite) && file.exists(output_file)) {
+    return(.fast_fallback("munge_fused", "overwrite=FALSE with an existing gzip output requires the R path"))
+  }
+
+  list(
+    filename = filename,
+    trait.name = trait.name,
+    output_base = output_base,
+    output_file = output_file,
+    col_indices = col_indices,
+    provided_n = if (N_provided) N else NA_real_,
+    n_multiplier = n_multiplier,
+    has_info = has_info,
+    has_maf = has_maf
+  )
+}
+
+.munge_fused_log_report <- function(spec, rows, counts, hm3, info.filter, maf.filter, log.file) {
+  filename <- spec$filename
+  .LOG("Merging file:", filename, " with the reference file:", hm3,file=log.file)
+  .LOG(as.integer(rows[1]), " rows present in the full ", filename, " summary statistics file.",file=log.file)
+  .LOG(as.integer(rows[1] - rows[2]), " rows were removed from the ", filename, " summary statistics file as the rs-ids for these rows were not present in the reference file.",file=log.file)
+
+  if (counts[1] > 0) .LOG(counts[1], " rows were removed from the ", filename, " summary statistics file due to missing values in the P-value column",file=log.file)
+  if (counts[2] > 0) .LOG(counts[2], " rows were removed from the ", filename, " summary statistics file due to missing values in the effect column",file=log.file)
+  if (counts[8] > 0) .LOG("The effect column was determined to be coded as an odds ratio (OR) for the ", filename, " summary statistics file. Please ensure this is correct.",file=log.file)
+  if (counts[3] > 0) .LOG(counts[3], " row(s) were removed from the ", filename, " summary statistics file due to the effect allele (A1) column not matching A1 or A2 in the reference file.",file=log.file)
+  if (counts[4] > 0) .LOG(counts[4], " row(s) were removed from the ", filename, " summary statistics file due to the other allele (A2) column not matching A1 or A2 in the reference file.",file=log.file)
+  if (counts[5] > 100) .LOG("In excess of 100 SNPs have P val above 1 or below 0. The P column may be mislabled!",file=log.file)
+  if (spec$has_info) {
+    .LOG(counts[6], " rows were removed from the ", filename, " summary statistics file due to INFO values below the designated threshold of", info.filter,file=log.file)
+  }else{.LOG("No INFO column, cannot filter on INFO, which may influence results",file=log.file)}
+  if (spec$has_maf) {
+    .LOG(counts[7], " rows were removed from the ", filename, " summary statistics file due to missing MAF information or MAFs below the designated threshold of", maf.filter,file=log.file)
+  }else{
+    .LOG("No MAF column, cannot filter on MAF, which may influence results",file=log.file)
+  }
+
+  .LOG(as.integer(rows[3]), "SNPs are left in the summary statistics file ", filename, " after QC.",file=log.file)
+  .LOG("I am done munging file: ", filename,file=log.file)
+  .LOG("The file is saved as ", spec$output_file, " in the current working directory.",file=log.file)
+}
+
+.munge_fused_fast <- function(filename, trait.name, N, ref, hm3, info.filter, maf.filter,
+                              column.names, overwrite, log.file, utilfuncs = NULL) {
+  spec <- .munge_fused_prepare(filename, trait.name, N, ref, hm3, info.filter, maf.filter,
+                               column.names, overwrite, log.file, utilfuncs)
+  if (is.null(spec)) {
+    return(NULL)
+  }
+
   native_error <- NULL
   out <- tryCatch(
     .Call(
       "genomicssem_munge_fused_call",
       as.character(filename),
-      as.character(output_file),
+      as.character(spec$output_base),
       as.character(ref$SNP),
       as.integer(.allele_code(ref$A1)),
       as.integer(.allele_code(ref$A2)),
-      as.integer(col_indices),
-      as.numeric(if (N_provided) N else NA_real_),
-      as.numeric(n_multiplier),
+      as.integer(spec$col_indices),
+      as.numeric(spec$provided_n),
+      as.numeric(spec$n_multiplier),
       as.numeric(info.filter),
       as.numeric(maf.filter),
       PACKAGE = "GenomicSEM"
@@ -644,32 +696,100 @@ Please note that this is likely effective sample size cut in half. The function 
     return(.fast_fallback("munge_fused", reason))
   }
 
-  rows <- out$rows
-  counts <- out$counts
-  .LOG("Merging file:", filename, " with the reference file:", hm3,file=log.file)
-  .LOG(as.integer(rows[1]), " rows present in the full ", filename, " summary statistics file.",file=log.file)
-  .LOG(as.integer(rows[1] - rows[2]), " rows were removed from the ", filename, " summary statistics file as the rs-ids for these rows were not present in the reference file.",file=log.file)
+  gzip(spec$output_base, overwrite=overwrite)
+  .munge_fused_log_report(spec, out$rows, out$counts, hm3, info.filter, maf.filter, log.file)
+  invisible(list(used = TRUE))
+}
 
-  if (counts[1] > 0) .LOG(counts[1], " rows were removed from the ", filename, " summary statistics file due to missing values in the P-value column",file=log.file)
-  if (counts[2] > 0) .LOG(counts[2], " rows were removed from the ", filename, " summary statistics file due to missing values in the effect column",file=log.file)
-  if (counts[8] > 0) .LOG("The effect column was determined to be coded as an odds ratio (OR) for the ", filename, " summary statistics file. Please ensure this is correct.",file=log.file)
-  if (counts[3] > 0) .LOG(counts[3], " row(s) were removed from the ", filename, " summary statistics file due to the effect allele (A1) column not matching A1 or A2 in the reference file.",file=log.file)
-  if (counts[4] > 0) .LOG(counts[4], " row(s) were removed from the ", filename, " summary statistics file due to the other allele (A2) column not matching A1 or A2 in the reference file.",file=log.file)
-  if (counts[5] > 100) .LOG("In excess of 100 SNPs have P val above 1 or below 0. The P column may be mislabled!",file=log.file)
-  if (has_info) {
-    .LOG(counts[6], " rows were removed from the ", filename, " summary statistics file due to INFO values below the designated threshold of", info.filter,file=log.file)
-  }else{.LOG("No INFO column, cannot filter on INFO, which may influence results",file=log.file)}
-  if (has_maf) {
-    .LOG(counts[7], " rows were removed from the ", filename, " summary statistics file due to missing MAF information or MAFs below the designated threshold of", maf.filter,file=log.file)
-  }else{
-    .LOG("No MAF column, cannot filter on MAF, which may influence results",file=log.file)
+.munge_batch_threads <- function(parallel, cores, n.files) {
+  n.threads <- getOption("GenomicSEM.fast_munge_threads", NA_integer_)[1]
+  if (is.null(n.threads) || is.na(n.threads)) {
+    if (isTRUE(parallel)) {
+      n.threads <- if (is.null(cores)) detectCores() - 1L else cores
+    } else {
+      n.threads <- 1L
+    }
+  }
+  if (is.na(n.threads) || n.threads <= 0L) {
+    n.threads <- 1L
+  }
+  as.integer(min(n.files, n.threads))
+}
+
+.munge_fused_batch_fast <- function(filenames, trait.names, N, ref, hm3, info.filter, maf.filter,
+                                    column.names, overwrite, parallel, cores, log.file) {
+  if (length(filenames) < 2L || !isTRUE(overwrite)) {
+    return(NULL)
+  }
+  prep_logs <- rep(list(log.file), length(filenames))
+  if (isTRUE(parallel)) {
+    prep_logs <- lapply(str_replace_all(trait.names, fixed(" "), ""), function(trait.name) {
+      file(paste0(trait.name, "_munge.log"), open = "wt")
+    })
+    on.exit({
+      for (this_log in prep_logs) {
+        if (isOpen(this_log)) {
+          flush(this_log)
+          close(this_log)
+        }
+      }
+    }, add = TRUE)
+  }
+  specs <- lapply(seq_along(filenames), function(i) {
+    .munge_fused_prepare(filenames[i], trait.names[i], N[i], ref, hm3, info.filter, maf.filter,
+                         column.names, overwrite, prep_logs[[i]])
+  })
+  if (any(vapply(specs, is.null, logical(1)))) {
+    return(NULL)
   }
 
-  .LOG(as.integer(rows[3]), "SNPs are left in the summary statistics file ", filename, " after QC.",file=log.file)
-  gzip(output_file, overwrite=overwrite)
-  .LOG("I am done munging file: ", filename,file=log.file)
-  .LOG("The file is saved as ", paste0(output_file, ".gz"), " in the current working directory.",file=log.file)
-  invisible(list(used = TRUE))
+  n.threads <- .munge_batch_threads(parallel, cores, length(specs))
+  direct_gzip <- n.threads > 1L
+  native_error <- NULL
+  out <- tryCatch(
+    .Call(
+      "genomicssem_munge_fused_batch_call",
+      as.character(vapply(specs, `[[`, character(1), "filename")),
+      as.character(vapply(specs, `[[`, character(1), if (direct_gzip) "output_file" else "output_base")),
+      as.character(ref$SNP),
+      as.integer(.allele_code(ref$A1)),
+      as.integer(.allele_code(ref$A2)),
+      do.call(rbind, lapply(specs, function(spec) as.integer(spec$col_indices))),
+      as.numeric(vapply(specs, `[[`, numeric(1), "provided_n")),
+      as.numeric(vapply(specs, `[[`, numeric(1), "n_multiplier")),
+      as.numeric(info.filter),
+      as.numeric(maf.filter),
+      as.integer(n.threads),
+      PACKAGE = "GenomicSEM"
+    ),
+    error = function(e) {
+      native_error <<- conditionMessage(e)
+      NULL
+    }
+  )
+  if (is.null(out) || any(out$unsupported)) {
+    reason <- if (is.null(native_error)) "native batch engine returned unsupported input" else native_error
+    return(.fast_fallback("munge_fused_batch", reason))
+  }
+  if (!direct_gzip) {
+    for (spec in specs) {
+      gzip(spec$output_base, overwrite=overwrite)
+    }
+  }
+
+  if (isTRUE(parallel)) {
+    .LOG("As parallel munging was requested, logs of each sumstats file will be saved separately",file=log.file)
+  }
+  for (i in seq_along(specs)) {
+    this_log <- prep_logs[[i]]
+    if (!isTRUE(parallel)) {
+      .LOG("\n\n", file=this_log, print=FALSE)
+    }
+    .LOG("Munging file: ", specs[[i]]$filename, file=this_log, print=TRUE)
+    .munge_fused_log_report(specs[[i]], out$rows[i, ], out$counts[i, ], hm3, info.filter, maf.filter, this_log)
+  }
+
+  invisible(list(used = TRUE, threads = n.threads))
 }
 
 .munge_qc_fast <- function(file, info.filter, maf.filter) {
