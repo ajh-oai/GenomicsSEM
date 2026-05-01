@@ -197,6 +197,56 @@ check_sumstats_fused_engine <- function() {
   })
 }
 
+check_sumstats_fused_batch_engine <- function() {
+  with_temp_cwd({
+    ref <- make_ref()
+    ss1 <- make_sumstats()
+    ss2 <- make_sumstats()
+    ss2$P[ss2$SNP == "rs6"] <- NA_character_
+    write.table(ref, "ref.txt", row.names = FALSE, quote = FALSE)
+    write.table(ss1, gzfile("trait1.txt.gz"), row.names = FALSE, quote = FALSE)
+    write.table(ss2, gzfile("trait2.txt.gz"), row.names = FALSE, quote = FALSE)
+
+    old <- options(
+      GenomicSEM.fast_table_read = FALSE,
+      GenomicSEM.fast_snp_join = FALSE,
+      GenomicSEM.fast_sumstats_qc = FALSE,
+      GenomicSEM.fast_sumstats_engine = FALSE,
+      GenomicSEM.fast_sumstats_threads = NULL
+    )
+    on.exit(options(old), add = TRUE)
+
+    fallback <- suppressWarnings(sumstats(
+      files = c("trait1.txt.gz", "trait2.txt.gz"),
+      ref = "ref.txt",
+      trait.names = c("trait1", "trait2"),
+      se.logit = c(TRUE, TRUE),
+      parallel = FALSE
+    ))
+
+    options(
+      GenomicSEM.fast_sumstats_engine = TRUE,
+      GenomicSEM.fast_sumstats_threads = 2L
+    )
+    fast <- suppressWarnings(sumstats(
+      files = c("trait1.txt.gz", "trait2.txt.gz"),
+      ref = "ref.txt",
+      trait.names = c("trait1", "trait2"),
+      se.logit = c(TRUE, TRUE),
+      parallel = TRUE,
+      cores = 2L
+    ))
+
+    stopifnot(identical(names(fallback), names(fast)))
+    stopifnot(identical(fallback$SNP, fast$SNP))
+    stopifnot(!("rs6" %in% fast$SNP))
+    numeric_cols <- setdiff(names(fallback), c("SNP", "A1", "A2"))
+    stopifnot(max(abs(as.matrix(fallback[, numeric_cols]) - as.matrix(fast[, numeric_cols])), na.rm = TRUE) < 1e-12)
+    stopifnot(file.exists("trait1_sumstats.log"))
+    stopifnot(file.exists("trait2_sumstats.log"))
+  })
+}
+
 check_munge_fast_reader <- function() {
   with_temp_cwd({
     ref <- make_ref()
@@ -463,6 +513,7 @@ check_block_products()
 check_reader_preserves_p_character()
 check_sumstats_fast_reader()
 check_sumstats_fused_engine()
+check_sumstats_fused_batch_engine()
 check_munge_fast_reader()
 check_munge_fused_engine()
 check_munge_fused_batch_engine()

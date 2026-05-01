@@ -1400,3 +1400,72 @@ Remote follow-up:
 - Requested a 16-CPU Panda `flex` pool for a cleaner scaling run, but as of `2026-05-01 13:02 PDT`
   the pool remained `Assigning` and `brix capacity --clusters panda --cpu --show summary` reported
   zero healthy `flex` CPU capacity, so no remote result was available yet.
+
+## 2026-05-01 16:11 PDT - Batched `sumstats()` orchestration and native listwise merge
+
+Change:
+
+- Added batched native `sumstats()` orchestration for supported multi-file inputs.
+- The batch path shares one reference index across files, runs per-trait Rust prep in parallel, and
+  performs the final cross-trait listwise SNP intersection natively before returning one combined
+  R table.
+- Added `options(GenomicSEM.fast_sumstats_threads=...)` plus
+  `benches/bench_sumstats_batch.R`.
+
+Validation:
+
+```sh
+cargo test --workspace
+R CMD INSTALL --install-tests .
+Rscript tests/prep-fast-path.R
+Rscript benches/bench_sumstats_batch.R 100000 4 1 13
+Rscript benches/bench_sumstats_batch.R 100000 4 2 13
+Rscript benches/bench_sumstats_batch.R 100000 4 4 13
+Rscript benches/bench_prep_fast_paths.R 100000 4 1 200 13
+```
+
+Local 4-file / 100k-SNP batch benchmark:
+
+| backend | threads | elapsed_sec | rows | checksum |
+|---|---:|---:|---:|---:|
+| `legacy_serial` | 1 | 3.058 | 99948 | 136514.8 |
+| `legacy_parallel` | 4 | 2.729 | 99948 | 136514.8 |
+| `native_batch_1t` | 1 | 0.223 | 99948 | 136514.8 |
+| `native_batch_threads` | 4 | 0.078 | 99948 | 136514.8 |
+
+Local thread scaling on the same workload:
+
+| backend | threads | elapsed_sec | rows | checksum |
+|---|---:|---:|---:|---:|
+| `legacy_serial` | 1 | 3.006 | 99948 | 136514.8 |
+| `legacy_parallel` | 1 | 1.083 | 99948 | 136514.8 |
+| `native_batch_1t` | 1 | 0.216 | 99948 | 136514.8 |
+| `native_batch_threads` | 1 | 0.237 | 99948 | 136514.8 |
+| `legacy_serial` | 1 | 3.020 | 99948 | 136514.8 |
+| `legacy_parallel` | 2 | 1.579 | 99948 | 136514.8 |
+| `native_batch_1t` | 1 | 0.213 | 99948 | 136514.8 |
+| `native_batch_threads` | 2 | 0.124 | 99948 | 136514.8 |
+| `legacy_serial` | 1 | 3.058 | 99948 | 136514.8 |
+| `legacy_parallel` | 4 | 2.729 | 99948 | 136514.8 |
+| `native_batch_1t` | 1 | 0.223 | 99948 | 136514.8 |
+| `native_batch_threads` | 4 | 0.078 | 99948 | 136514.8 |
+
+Interpretation:
+
+- Against the original serial path, batched native `sumstats()` is `13.7x` faster at one thread and
+  `39.2x` faster with four Rust workers on this multi-trait workload.
+- Against the existing R PSOCK parallel path, the four-thread native batch path is `35.0x` faster
+  here.
+- The batch fixture intentionally drops different SNPs in different traits, so equal output rows
+  and checksums also validate the native cross-trait listwise merge, not only per-file transforms.
+- This finishes the native prep-engine story more cleanly: supported multi-file `munge()` and
+  `sumstats()` calls now both avoid R-side file orchestration; `sumstats()` additionally avoids the
+  repeated R join loop that used to assemble the final multivariate table.
+
+Release-scope decision:
+
+- I evaluated whether to add a `commonfactor()` Rust fast path in the same release packet.
+  `commonfactor()` is only a single-model fit, and its implementation also includes convergence
+  recovery, null-model/CFI fits, and lavaan-shaped reporting that are not shared with the existing
+  `commonfactorGWAS()` batch solver. The likely runtime gain is small while the release risk is not,
+  so this remains deferred rather than broadening `0.0.5d` late.

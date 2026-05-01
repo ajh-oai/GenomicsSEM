@@ -1295,6 +1295,131 @@ SEXP genomicssem_sumstats_fused_call(
   return out;
 }
 
+SEXP genomicssem_sumstats_fused_batch_call(
+    SEXP filenames_,
+    SEXP ref_snp_,
+    SEXP ref_a1_,
+    SEXP ref_a2_,
+    SEXP ref_maf_,
+    SEXP col_indices_,
+    SEXP provided_n_,
+    SEXP ols_,
+    SEXP beta_is_character_,
+    SEXP linprob_,
+    SEXP se_logit_,
+    SEXP info_filter_,
+    SEXP n_threads_) {
+  int nprotect = 0;
+  SEXP filenames = protect_string_vector(filenames_, "filenames", &nprotect);
+  SEXP ref_snp = protect_string_vector(ref_snp_, "ref$SNP", &nprotect);
+  SEXP ref_a1 = protect_int_vector(ref_a1_, "ref$A1", &nprotect);
+  SEXP ref_a2 = protect_int_vector(ref_a2_, "ref$A2", &nprotect);
+  SEXP ref_maf = protect_real_vector(ref_maf_, "ref$MAF", &nprotect);
+  SEXP col_indices = protect_int_matrix(col_indices_, "col_indices", &nprotect);
+  SEXP provided_n = protect_real_vector(provided_n_, "provided_n", &nprotect);
+  SEXP ols = protect_int_vector(ols_, "OLS", &nprotect);
+  SEXP beta_is_character = protect_int_vector(beta_is_character_, "beta_is_character", &nprotect);
+  SEXP linprob = protect_int_vector(linprob_, "linprob", &nprotect);
+  SEXP se_logit = protect_int_vector(se_logit_, "se.logit", &nprotect);
+
+  size_t col_nrow, col_ncol;
+  matrix_dims(col_indices, "col_indices", &col_nrow, &col_ncol);
+
+  R_xlen_t file_count = XLENGTH(filenames);
+  R_xlen_t ref_len = XLENGTH(ref_snp);
+  if (XLENGTH(ref_a1) != ref_len || XLENGTH(ref_a2) != ref_len || XLENGTH(ref_maf) != ref_len) {
+    Rf_error("reference SNP, allele, and MAF vectors must have the same length");
+  }
+
+  SEXP keep = PROTECT(Rf_allocVector(INTSXP, ref_len));
+  SEXP beta = PROTECT(Rf_allocMatrix(REALSXP, ref_len, file_count));
+  SEXP se = PROTECT(Rf_allocMatrix(REALSXP, ref_len, file_count));
+  SEXP counts = PROTECT(Rf_allocMatrix(INTSXP, file_count, 10));
+  SEXP rows = PROTECT(Rf_allocMatrix(REALSXP, file_count, 4));
+  SEXP mean_abs_z = PROTECT(Rf_allocVector(REALSXP, file_count));
+  SEXP unsupported = PROTECT(Rf_allocVector(LGLSXP, file_count));
+  nprotect += 7;
+
+  size_t *rows_buf = (size_t *)R_alloc((size_t)file_count * 4, sizeof(size_t));
+  size_t out_n = 0;
+  int *unsupported_buf = (int *)R_alloc((size_t)file_count, sizeof(int));
+
+  int status = genomicssem_sumstats_fused_batch(
+      string_ptrs(filenames),
+      (size_t)file_count,
+      string_ptrs(ref_snp),
+      (size_t)ref_len,
+      INTEGER(ref_a1),
+      (size_t)XLENGTH(ref_a1),
+      INTEGER(ref_a2),
+      (size_t)XLENGTH(ref_a2),
+      REAL(ref_maf),
+      (size_t)XLENGTH(ref_maf),
+      INTEGER(col_indices),
+      col_nrow,
+      col_ncol,
+      REAL(provided_n),
+      (size_t)XLENGTH(provided_n),
+      INTEGER(ols),
+      (size_t)XLENGTH(ols),
+      INTEGER(beta_is_character),
+      (size_t)XLENGTH(beta_is_character),
+      INTEGER(linprob),
+      (size_t)XLENGTH(linprob),
+      INTEGER(se_logit),
+      (size_t)XLENGTH(se_logit),
+      scalar_real(info_filter_, "info.filter"),
+      (size_t)scalar_int(n_threads_, "n_threads"),
+      INTEGER(keep),
+      (size_t)ref_len,
+      REAL(beta),
+      (size_t)XLENGTH(beta),
+      REAL(se),
+      (size_t)XLENGTH(se),
+      INTEGER(counts),
+      (size_t)XLENGTH(counts),
+      rows_buf,
+      (size_t)file_count * 4,
+      REAL(mean_abs_z),
+      (size_t)XLENGTH(mean_abs_z),
+      &out_n,
+      unsupported_buf,
+      (size_t)file_count);
+
+  check_status(status, "genomicssem_sumstats_fused_batch");
+  for (R_xlen_t i = 0; i < file_count * 4; ++i) {
+    REAL(rows)[i] = (double)rows_buf[i];
+  }
+  for (R_xlen_t i = 0; i < file_count; ++i) {
+    LOGICAL(unsupported)[i] = unsupported_buf[i];
+  }
+
+  SEXP out_n_sexp = PROTECT(Rf_ScalarInteger((int)out_n));
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 8));
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 8));
+  nprotect += 3;
+  SET_VECTOR_ELT(out, 0, keep);
+  SET_VECTOR_ELT(out, 1, beta);
+  SET_VECTOR_ELT(out, 2, se);
+  SET_VECTOR_ELT(out, 3, counts);
+  SET_VECTOR_ELT(out, 4, out_n_sexp);
+  SET_VECTOR_ELT(out, 5, rows);
+  SET_VECTOR_ELT(out, 6, mean_abs_z);
+  SET_VECTOR_ELT(out, 7, unsupported);
+  SET_STRING_ELT(names, 0, Rf_mkChar("keep"));
+  SET_STRING_ELT(names, 1, Rf_mkChar("beta"));
+  SET_STRING_ELT(names, 2, Rf_mkChar("se"));
+  SET_STRING_ELT(names, 3, Rf_mkChar("counts"));
+  SET_STRING_ELT(names, 4, Rf_mkChar("n"));
+  SET_STRING_ELT(names, 5, Rf_mkChar("rows"));
+  SET_STRING_ELT(names, 6, Rf_mkChar("mean_abs_z"));
+  SET_STRING_ELT(names, 7, Rf_mkChar("unsupported"));
+  Rf_setAttrib(out, R_NamesSymbol, names);
+
+  UNPROTECT(nprotect);
+  return out;
+}
+
 SEXP genomicssem_ldsc_block_products_call(
     SEXP weighted_ld_,
     SEXP weighted_chi_,

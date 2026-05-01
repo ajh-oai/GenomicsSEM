@@ -78,6 +78,7 @@ pub struct SumstatsFusedReport {
     pub rows_duplicate_removed: usize,
     pub rows_joined: usize,
     pub rows_written: usize,
+    pub mean_abs_z: f64,
     pub counts: [i32; SUMSTATS_QC_COUNT_LEN],
 }
 
@@ -89,6 +90,7 @@ impl Default for SumstatsFusedReport {
             rows_duplicate_removed: 0,
             rows_joined: 0,
             rows_written: 0,
+            mean_abs_z: f64::NAN,
             counts: [0; SUMSTATS_QC_COUNT_LEN],
         }
     }
@@ -107,6 +109,25 @@ pub struct MungeFusedInput<'a> {
     pub col_indices: &'a [i32],
     pub provided_n: Option<f64>,
     pub n_multiplier: f64,
+}
+
+#[derive(Clone, Debug)]
+pub struct SumstatsFusedInput<'a> {
+    pub filename: &'a str,
+    pub col_indices: &'a [i32],
+    pub provided_n: Option<f64>,
+    pub ols: bool,
+    pub beta_is_character: bool,
+    pub linprob: bool,
+    pub se_logit: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct SumstatsFusedBatchOutput {
+    pub keep: Vec<i32>,
+    pub beta: Vec<f64>,
+    pub se: Vec<f64>,
+    pub reports: Vec<SumstatsFusedReport>,
 }
 
 fn open_text_reader(path: &str) -> KernelResult<Box<dyn BufRead>> {
@@ -468,12 +489,13 @@ pub fn munge_fused_batch(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn sumstats_fused(
+fn sumstats_fused_with_ref_map(
     filename: &str,
     ref_snps: &[&str],
     ref_a1: &[i32],
     ref_a2: &[i32],
     ref_maf: &[f64],
+    ref_map: &HashMap<&str, usize>,
     col_indices: &[i32],
     provided_n: Option<f64>,
     info_filter: f64,
@@ -500,16 +522,6 @@ pub fn sumstats_fused(
             unsupported: true,
             ..SumstatsFusedReport::default()
         });
-    }
-
-    let mut ref_map = HashMap::with_capacity(ref_snps.len());
-    for (idx, snp) in ref_snps.iter().enumerate() {
-        if snp.is_empty() || ref_map.insert(*snp, idx).is_some() {
-            return Ok(SumstatsFusedReport {
-                unsupported: true,
-                ..SumstatsFusedReport::default()
-            });
-        }
     }
 
     let snp_idx = col_index(col_indices, SNP_COL);
@@ -661,8 +673,181 @@ pub fn sumstats_fused(
     }
 
     report.rows_written = out_n;
+    report.mean_abs_z = if out_n == 0 {
+        f64::NAN
+    } else {
+        beta[..out_n]
+            .iter()
+            .zip(&se_out[..out_n])
+            .map(|(beta, se)| (beta / se).abs())
+            .sum::<f64>()
+            / out_n as f64
+    };
     report.counts = counts;
     Ok(report)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn sumstats_fused(
+    filename: &str,
+    ref_snps: &[&str],
+    ref_a1: &[i32],
+    ref_a2: &[i32],
+    ref_maf: &[f64],
+    col_indices: &[i32],
+    provided_n: Option<f64>,
+    info_filter: f64,
+    ols: bool,
+    beta_is_character: bool,
+    linprob: bool,
+    se_logit: bool,
+    out: &mut SumstatsFusedOutput<'_>,
+) -> KernelResult<SumstatsFusedReport> {
+    let Some(ref_map) = build_ref_map(ref_snps) else {
+        return Ok(SumstatsFusedReport {
+            unsupported: true,
+            ..SumstatsFusedReport::default()
+        });
+    };
+
+    sumstats_fused_with_ref_map(
+        filename,
+        ref_snps,
+        ref_a1,
+        ref_a2,
+        ref_maf,
+        &ref_map,
+        col_indices,
+        provided_n,
+        info_filter,
+        ols,
+        beta_is_character,
+        linprob,
+        se_logit,
+        out,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn sumstats_fused_batch(
+    inputs: &[SumstatsFusedInput<'_>],
+    ref_snps: &[&str],
+    ref_a1: &[i32],
+    ref_a2: &[i32],
+    ref_maf: &[f64],
+    info_filter: f64,
+    n_threads: usize,
+) -> KernelResult<SumstatsFusedBatchOutput> {
+    if n_threads == 0 {
+        return Err(KernelError::BadDimensions);
+    }
+    let Some(ref_map) = build_ref_map(ref_snps) else {
+        return Ok(SumstatsFusedBatchOutput {
+            keep: Vec::new(),
+            beta: Vec::new(),
+            se: Vec::new(),
+            reports: inputs
+                .iter()
+                .map(|_| SumstatsFusedReport {
+                    unsupported: true,
+                    ..SumstatsFusedReport::default()
+                })
+                .collect(),
+        });
+    };
+
+    struct TraitOutput {
+        report: SumstatsFusedReport,
+        keep: Vec<i32>,
+        beta: Vec<f64>,
+        se: Vec<f64>,
+    }
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(n_threads)
+        .build()
+        .map_err(|_| KernelError::ThreadPoolBuild)?;
+    let outputs: KernelResult<Vec<TraitOutput>> = pool.install(|| {
+        inputs
+            .par_iter()
+            .map(|input| {
+                let mut keep = vec![0; ref_snps.len()];
+                let mut beta = vec![0.0; ref_snps.len()];
+                let mut se = vec![0.0; ref_snps.len()];
+                let report = sumstats_fused_with_ref_map(
+                    input.filename,
+                    ref_snps,
+                    ref_a1,
+                    ref_a2,
+                    ref_maf,
+                    &ref_map,
+                    input.col_indices,
+                    input.provided_n,
+                    info_filter,
+                    input.ols,
+                    input.beta_is_character,
+                    input.linprob,
+                    input.se_logit,
+                    &mut SumstatsFusedOutput {
+                        keep: &mut keep,
+                        beta: &mut beta,
+                        se: &mut se,
+                    },
+                )?;
+                Ok(TraitOutput {
+                    report,
+                    keep,
+                    beta,
+                    se,
+                })
+            })
+            .collect()
+    });
+    let outputs = outputs?;
+    let reports: Vec<SumstatsFusedReport> = outputs.iter().map(|out| out.report.clone()).collect();
+    if outputs.iter().any(|out| out.report.unsupported) {
+        return Ok(SumstatsFusedBatchOutput {
+            keep: Vec::new(),
+            beta: Vec::new(),
+            se: Vec::new(),
+            reports,
+        });
+    }
+
+    let mut present_counts = vec![0usize; ref_snps.len()];
+    let mut positions = Vec::with_capacity(outputs.len());
+    for output in &outputs {
+        let mut trait_positions = vec![usize::MAX; ref_snps.len()];
+        for out_idx in 0..output.report.rows_written {
+            let ref_idx = (output.keep[out_idx] - 1) as usize;
+            trait_positions[ref_idx] = out_idx;
+            present_counts[ref_idx] += 1;
+        }
+        positions.push(trait_positions);
+    }
+
+    let keep: Vec<i32> = present_counts
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, count)| (*count == outputs.len()).then_some((idx + 1) as i32))
+        .collect();
+    let out_n = keep.len();
+    let mut beta = vec![0.0; out_n * outputs.len()];
+    let mut se = vec![0.0; out_n * outputs.len()];
+    for (trait_idx, output) in outputs.iter().enumerate() {
+        for (out_idx, ref_keep) in keep.iter().enumerate() {
+            let source_idx = positions[trait_idx][(*ref_keep - 1) as usize];
+            beta[out_idx + trait_idx * out_n] = output.beta[source_idx];
+            se[out_idx + trait_idx * out_n] = output.se[source_idx];
+        }
+    }
+
+    Ok(SumstatsFusedBatchOutput {
+        keep,
+        beta,
+        se,
+        reports,
+    })
 }
 
 #[cfg(test)]

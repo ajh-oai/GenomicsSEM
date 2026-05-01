@@ -17,6 +17,11 @@ This benchmark is intentionally narrow. It is useful for validating kernel throu
 
 `profile_workflows.R` runs an Rprof profile for a small end-to-end workflow. `profile_commonfactor_phases.R` is a lower-overhead manual phase split for `commonfactorGWAS()`; use it when Rprof is too invasive or unstable at larger trait counts.
 
+`bench_munge_batch.R` and `bench_sumstats_batch.R` compare the old serial/PSOCK prep orchestration
+against the batched native prep engines on synthetic multi-file workloads. The `sumstats()` harness
+also introduces per-trait missing P-values so the native cross-trait listwise merge is exercised,
+not just the per-file transforms.
+
 The upstream repo does not include a runnable benchmark suite or bundled benchmark data. Its existing performance references are in `README.md` and `PATCHNOTES.md`, including 100K-SNP and 1.8M-SNP `userGWAS` timings. This synthetic workflow benchmark is meant to be a reproducible stand-in for those workloads, not a biological validation dataset.
 
 Example commands:
@@ -27,6 +32,8 @@ Rscript benches/bench_usergwas_synthetic.R 1000 6 1,2,4,8 userGWAS 1
 Rscript benches/bench_usergwas_synthetic.R 1000 6 1,2,4,8 commonfactorGWAS 1
 Rscript benches/profile_commonfactor_phases.R 50 12 1
 Rscript benches/profile_workflows.R 100 3 userGWAS 1
+Rscript benches/bench_munge_batch.R 100000 4 4 13
+Rscript benches/bench_sumstats_batch.R 100000 4 4 13
 ```
 
 `bench_usergwas_synthetic.R` accepts optional optimization toggles after the seed:

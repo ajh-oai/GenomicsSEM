@@ -80,8 +80,31 @@ sumstats <- function(files,ref,trait.names=NULL,se.logit,OLS=NULL,linprob=NULL,N
   }
   
   data.frame.out <- ref
-  
-  if(!parallel){
+
+  batch_result <- .sumstats_fused_batch_fast(
+    filenames = filenames,
+    trait.names = trait.names,
+    N = N,
+    keep.indel = keep.indel,
+    OLS = OLS,
+    betas = betas,
+    info.filter = info.filter,
+    linprob = linprob,
+    se.logit = se.logit,
+    names.beta = names.beta,
+    names.se = names.se,
+    ref = ref,
+    ref2 = ref2,
+    parallel = parallel,
+    cores = cores,
+    log.file = log.file,
+    direct.filter = direct.filter
+  )
+
+  if (!is.null(batch_result)) {
+    .fast_note("sumstats", sprintf("using batched Rust prep with %d thread(s)", batch_result$threads))
+    data.frame.out <- batch_result$output
+  } else if(!parallel){
     Output <- list()
     for(i in 1:len){
       Output[[i]] <- .sumstats_main(i, utilfuncs=NULL, filenames[i], trait.names[i], N[i], keep.indel, OLS[i], betas[i],
@@ -118,8 +141,10 @@ sumstats <- function(files,ref,trait.names=NULL,se.logit,OLS=NULL,linprob=NULL,N
                      info.filter, linprob[i], se.logit[i], names.beta[i], names.se[i], ref, ref2, NULL, NULL,direct.filter)
     }
   }
-  for(i in 1:len){
-    data.frame.out <- .snp_inner_join(data.frame.out, Output[[i]], by = "SNP", mode = "inner_join")
+  if (is.null(batch_result)) {
+    for(i in 1:len){
+      data.frame.out <- .snp_inner_join(data.frame.out, Output[[i]], by = "SNP", mode = "inner_join")
+    }
   }
   
   end.time <- Sys.time()

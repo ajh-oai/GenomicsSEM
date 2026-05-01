@@ -3,9 +3,9 @@
 use genomicssem_core::{
     fill_s_full, fill_v_full, fill_v_snp, fill_v_snp_batch, fill_z_pre, fit_commonfactor_batch,
     fit_commonfactor_main, fit_commonfactor_q, fit_generic_sem, fit_generic_sem_batch,
-    ldsc_block_products, munge_fused, munge_fused_batch, munge_qc, sumstats_fused, sumstats_qc,
-    GenomicControl, KernelError, MungeFusedInput, MungeQcOutput, SumstatsFusedOutput,
-    SumstatsQcOutput,
+    ldsc_block_products, munge_fused, munge_fused_batch, munge_qc, sumstats_fused,
+    sumstats_fused_batch, sumstats_qc, GenomicControl, KernelError, MungeFusedInput, MungeQcOutput,
+    SumstatsFusedInput, SumstatsFusedOutput, SumstatsQcOutput,
 };
 use std::ffi::CStr;
 use std::os::raw::c_char;
@@ -1035,6 +1035,146 @@ pub unsafe extern "C" fn genomicssem_sumstats_fused(
         *rows_joined = report.rows_joined;
         *rows_written = report.rows_written;
         *unsupported = i32::from(report.unsupported);
+        Ok(())
+    })();
+
+    result.map(|()| OK).unwrap_or_else(code)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn genomicssem_sumstats_fused_batch(
+    filenames: *const *const c_char,
+    file_count: usize,
+    ref_snp: *const *const c_char,
+    ref_len: usize,
+    ref_a1: *const i32,
+    ref_a1_len: usize,
+    ref_a2: *const i32,
+    ref_a2_len: usize,
+    ref_maf: *const f64,
+    ref_maf_len: usize,
+    col_indices: *const i32,
+    col_indices_nrow: usize,
+    col_indices_ncol: usize,
+    provided_n: *const f64,
+    provided_n_len: usize,
+    ols: *const i32,
+    ols_len: usize,
+    beta_is_character: *const i32,
+    beta_is_character_len: usize,
+    linprob: *const i32,
+    linprob_len: usize,
+    se_logit: *const i32,
+    se_logit_len: usize,
+    info_filter: f64,
+    n_threads: usize,
+    keep: *mut i32,
+    keep_len: usize,
+    beta: *mut f64,
+    beta_len: usize,
+    se: *mut f64,
+    se_len: usize,
+    out_counts: *mut i32,
+    out_counts_len: usize,
+    out_rows: *mut usize,
+    out_rows_len: usize,
+    out_mean_abs_z: *mut f64,
+    out_mean_abs_z_len: usize,
+    out_n: *mut usize,
+    unsupported: *mut i32,
+    unsupported_len: usize,
+) -> i32 {
+    let result = (|| {
+        if out_n.is_null() {
+            return Err(KernelError::NullPointer);
+        }
+        let filenames = checked_cstrs(filenames, file_count)?;
+        let ref_snp = checked_cstrs(ref_snp, ref_len)?;
+        let ref_a1 = checked_slice(ref_a1, ref_a1_len)?;
+        let ref_a2 = checked_slice(ref_a2, ref_a2_len)?;
+        let ref_maf = checked_slice(ref_maf, ref_maf_len)?;
+        let col_indices = checked_slice(col_indices, col_indices_nrow * col_indices_ncol)?;
+        let provided_n = checked_slice(provided_n, provided_n_len)?;
+        let ols = checked_slice(ols, ols_len)?;
+        let beta_is_character = checked_slice(beta_is_character, beta_is_character_len)?;
+        let linprob = checked_slice(linprob, linprob_len)?;
+        let se_logit = checked_slice(se_logit, se_logit_len)?;
+        let keep = checked_slice_mut(keep, keep_len)?;
+        let beta = checked_slice_mut(beta, beta_len)?;
+        let se = checked_slice_mut(se, se_len)?;
+        let out_counts = checked_slice_mut(out_counts, out_counts_len)?;
+        let out_rows = checked_slice_mut(out_rows, out_rows_len)?;
+        let out_mean_abs_z = checked_slice_mut(out_mean_abs_z, out_mean_abs_z_len)?;
+        let unsupported = checked_slice_mut(unsupported, unsupported_len)?;
+
+        if ref_a1.len() != ref_len
+            || ref_a2.len() != ref_len
+            || ref_maf.len() != ref_len
+            || provided_n.len() != file_count
+            || ols.len() != file_count
+            || beta_is_character.len() != file_count
+            || linprob.len() != file_count
+            || se_logit.len() != file_count
+            || col_indices_nrow != file_count
+            || col_indices_ncol < genomicssem_core::SUMSTATS_FUSED_COLS
+            || keep.len() < ref_len
+            || beta.len() < ref_len * file_count
+            || se.len() < ref_len * file_count
+            || out_counts.len() < file_count * genomicssem_core::SUMSTATS_QC_COUNT_LEN
+            || out_rows.len() < file_count * 4
+            || out_mean_abs_z.len() < file_count
+            || unsupported.len() < file_count
+        {
+            return Err(KernelError::BadDimensions);
+        }
+
+        let mut per_file_col_indices = Vec::with_capacity(file_count);
+        for file_i in 0..file_count {
+            let mut file_cols = Vec::with_capacity(col_indices_ncol);
+            for col_i in 0..col_indices_ncol {
+                file_cols.push(col_indices[file_i + col_i * col_indices_nrow]);
+            }
+            per_file_col_indices.push(file_cols);
+        }
+
+        let inputs: Vec<_> = (0..file_count)
+            .map(|file_i| SumstatsFusedInput {
+                filename: filenames[file_i],
+                col_indices: per_file_col_indices[file_i].as_slice(),
+                provided_n: provided_n[file_i].is_finite().then_some(provided_n[file_i]),
+                ols: ols[file_i] != 0,
+                beta_is_character: beta_is_character[file_i] != 0,
+                linprob: linprob[file_i] != 0,
+                se_logit: se_logit[file_i] != 0,
+            })
+            .collect();
+
+        let output = sumstats_fused_batch(
+            &inputs,
+            &ref_snp,
+            ref_a1,
+            ref_a2,
+            ref_maf,
+            info_filter,
+            n_threads,
+        )?;
+
+        for (file_i, report) in output.reports.iter().enumerate() {
+            for count_i in 0..genomicssem_core::SUMSTATS_QC_COUNT_LEN {
+                out_counts[file_i + count_i * file_count] = report.counts[count_i];
+            }
+            out_rows[file_i] = report.rows_total;
+            out_rows[file_i + file_count] = report.rows_duplicate_removed;
+            out_rows[file_i + 2 * file_count] = report.rows_joined;
+            out_rows[file_i + 3 * file_count] = report.rows_written;
+            out_mean_abs_z[file_i] = report.mean_abs_z;
+            unsupported[file_i] = i32::from(report.unsupported);
+        }
+
+        *out_n = output.keep.len();
+        keep[..output.keep.len()].copy_from_slice(&output.keep);
+        beta[..output.beta.len()].copy_from_slice(&output.beta);
+        se[..output.se.len()].copy_from_slice(&output.se);
         Ok(())
     })();
 
