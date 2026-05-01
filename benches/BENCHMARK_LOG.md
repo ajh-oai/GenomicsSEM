@@ -1377,3 +1377,26 @@ Interpretation:
 - Against the existing R PSOCK parallel path, the 4-thread native batch path is `6.7x` faster here.
 - The implementation intentionally keeps the faster old single-file compression route while using
   direct native gzip only where multi-file parallelism makes it worthwhile.
+
+Local scaling follow-up on the same synthetic workload:
+
+| backend | threads | elapsed_sec | checksum |
+|---|---:|---:|---:|
+| `legacy_serial` | 1 | 4.064 | 4000669437 |
+| `legacy_parallel` | 1 | 1.575 | 4000669437 |
+| `native_batch_1t` | 1 | 0.847 | 4000669437 |
+| `native_batch_threads` | 1 | 0.845 | 4000669437 |
+| `legacy_serial` | 1 | 4.061 | 4000669437 |
+| `legacy_parallel` | 2 | 1.736 | 4000669437 |
+| `native_batch_1t` | 1 | 0.840 | 4000669437 |
+| `native_batch_threads` | 2 | 0.600 | 4000669437 |
+| `legacy_serial` | 1 | 3.972 | 4000669437 |
+| `legacy_parallel` | 4 | 2.675 | 4000669437 |
+| `native_batch_1t` | 1 | 0.844 | 4000669437 |
+| `native_batch_threads` | 4 | 0.432 | 4000669437 |
+
+Remote follow-up:
+
+- Requested a 16-CPU Panda `flex` pool for a cleaner scaling run, but as of `2026-05-01 13:02 PDT`
+  the pool remained `Assigning` and `brix capacity --clusters panda --cpu --show summary` reported
+  zero healthy `flex` CPU capacity, so no remote result was available yet.
