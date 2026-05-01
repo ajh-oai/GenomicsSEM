@@ -1469,3 +1469,67 @@ Release-scope decision:
   recovery, null-model/CFI fits, and lavaan-shaped reporting that are not shared with the existing
   `commonfactorGWAS()` batch solver. The likely runtime gain is small while the release risk is not,
   so this remains deferred rather than broadening `0.0.5d` late.
+
+## 2026-05-01 16:20 PDT - Clean-clone `0.0.5d` release rerun
+
+Validation:
+
+- Cloned commit `5558692` into `/tmp/genomicssem-clean-0.0.5d`.
+- From that fresh checkout:
+
+```sh
+cargo test --workspace
+R CMD INSTALL --install-tests .
+for test in tests/*.R; do Rscript "$test"; done
+Rscript benches/bench_prep_fast_paths.R 100000 4 1 200 13
+Rscript benches/bench_munge_batch.R 100000 4 4 13
+Rscript benches/bench_sumstats_batch.R 100000 4 4 13
+Rscript benches/bench_usergwas_synthetic.R 1000 6 1,4 userGWAS 1 TRUE FALSE TRUE TRUE FALSE TRUE
+Rscript benches/bench_usergwas_synthetic.R 1000 6 1,4 commonfactorGWAS 1 TRUE FALSE TRUE TRUE TRUE FALSE
+```
+
+- A second untouched clone passed `R CMD check --no-manual .` with the package's existing
+  `9 WARNINGs, 5 NOTEs`; all package tests passed under check. The remaining warnings were existing
+  release-hygiene items around Rd docs, GNU extensions in `src/Makevars`, and the static Rust library
+  exposing `abort`, not failures from the new prep paths.
+
+Clean-clone medians from three 4-file / 100k-SNP prep runs:
+
+| workflow | backend | threads | median_sec | checksum |
+|---|---|---:|---:|---:|
+| `sumstats()` | `legacy_serial` | 1 | 2.546 | 136514.8 |
+| `sumstats()` | `legacy_parallel` | 4 | 2.525 | 136514.8 |
+| `sumstats()` | `native_batch_1t` | 1 | 0.192 | 136514.8 |
+| `sumstats()` | `native_batch_threads` | 4 | 0.079 | 136514.8 |
+| `munge()` | `legacy_serial` | 1 | 3.834 | 4000669437 |
+| `munge()` | `legacy_parallel` | 4 | 2.566 | 4000669437 |
+| `munge()` | `native_batch_1t` | 1 | 0.832 | 4000669437 |
+| `munge()` | `native_batch_threads` | 4 | 0.376 | 4000669437 |
+
+Interpretation:
+
+- Clean-clone median `sumstats()` speedup is `13.3x` at one native thread and `32.2x` at four
+  native workers versus the original serial path; the four-thread native path is `32.0x` faster
+  than the existing PSOCK path on this fixture.
+- Clean-clone median `munge()` speedup is `4.6x` at one native thread and `10.2x` at four native
+  workers versus the original serial path; the four-thread native path is `6.8x` faster than the
+  existing PSOCK path on this fixture.
+- The clean-clone single-run prep suite also reported `sumstats()` `2.639s -> 0.202s` and
+  `munge()` `4.136s -> 0.857s` in the older `bench_prep_fast_paths.R` matrix, preserving checksum
+  parity across modes.
+
+Clean-clone synthetic model-fit sanity rerun:
+
+| workflow | backend | cores | elapsed_sec | checksum |
+|---|---|---:|---:|---:|
+| `userGWAS(Q_SNP=TRUE)` | `old_r_workflow` | 1 | 38.172 | 12660812 |
+| `userGWAS(Q_SNP=TRUE)` | `old_r_workflow` | 4 | 10.902 | 12660812 |
+| `userGWAS(Q_SNP=TRUE)` | `rust_binding_workflow` | 1 | 0.722 | 12660812 |
+| `userGWAS(Q_SNP=TRUE)` | `rust_binding_workflow` | 4 | 0.617 | 12660812 |
+| `commonfactorGWAS()` | `old_r_workflow` | 1 | 93.489 | 1009542 |
+| `commonfactorGWAS()` | `old_r_workflow` | 4 | 23.950 | 1009542 |
+| `commonfactorGWAS()` | `rust_binding_workflow` | 1 | 0.241 | 1009542 |
+| `commonfactorGWAS()` | `rust_binding_workflow` | 4 | 0.061 | 1009542 |
+
+- These local model-fit numbers are release-sanity reruns, not replacements for the stronger remote
+  public-workflow measurements already recorded elsewhere in this log.
