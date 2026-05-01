@@ -1254,3 +1254,80 @@ Interpretation:
 - The better old-lavaan projection is about `3.36h` for 1M SNPs on this 16-CPU panda pod, not the earlier rough `~12h` from the 100-SNP point.
 - The measured Rust-backed 1M scan on the same class of pod was `12.380s`, so the slope-based old-vs-new model-fitting speedup is about `978x`.
 - The per-SNP time stabilizes near `12.2ms/SNP` by 25k-50k SNPs, which makes the linear projection much more defensible than the 100-SNP estimate.
+
+## 2026-05-01 12:30 PDT - Native `userGWAS()` fast-path setup
+
+Change:
+
+- Added a restricted native model parser for the lavaan syntax already supported by the Rust
+  `userGWAS()` fast path.
+- Added a native fixed-measurement initializer: fit the no-SNP model through the existing Rust
+  generic SEM solver, freeze measurement parameters, then warm-start the first SNP fit natively.
+- `userGWAS()` now skips the one-time lavaan setup pass when
+  `options(GenomicSEM.fast_usergwas_native_setup=TRUE)` and the model is supported; unsupported
+  syntax still falls back to the prior lavaan-assisted setup path.
+
+Validation:
+
+```sh
+R CMD INSTALL --install-tests .
+Rscript tests/usergwas-fast-fit.R
+Rscript tests/fast-path-release.R
+cargo test --workspace
+```
+
+- `tests/usergwas-fast-fit.R` now traces `lavaan::sem()` to throw and confirms the supported native
+  path still completes as `rust_usergwas_batch`.
+- Existing old-vs-new parity checks continue to pass for unconstrained, constrained,
+  `Q_SNP=FALSE`, `Q_SNP=TRUE`, and `sub="F1~SNP"` cases.
+
+Local A/B command:
+
+```sh
+Rscript - <<'EOF'
+library(GenomicSEM)
+source('benches/synthetic_inputs.R')
+inputs <- make_synthetic_genomicsem_inputs(n_snp = 100L, k = 12L, seed = 1L)
+run_once <- function(native_setup) {
+  options(
+    GenomicSEM.use_rust = TRUE,
+    GenomicSEM.fast_usergwas_fit = TRUE,
+    GenomicSEM.fast_usergwas_native_setup = native_setup,
+    GenomicSEM.fast_strict = TRUE
+  )
+  gc()
+  start <- proc.time()[['elapsed']]
+  invisible(capture.output(suppressWarnings(userGWAS(
+    covstruc = inputs$covstruc,
+    SNPs = inputs$SNPs,
+    model = inputs$model,
+    estimation = 'DWLS',
+    parallel = FALSE,
+    GC = 'standard',
+    fix_measurement = TRUE,
+    Q_SNP = TRUE,
+    printwarn = TRUE
+  ))))
+  proc.time()[['elapsed']] - start
+}
+for (native in c(FALSE, TRUE)) run_once(native)
+do.call(rbind, lapply(c(FALSE, TRUE), function(native) {
+  times <- replicate(5, run_once(native))
+  data.frame(native_setup = native, median_sec = median(times), min_sec = min(times), max_sec = max(times))
+}))
+EOF
+```
+
+Results:
+
+| native_setup | median_sec | min_sec | max_sec |
+|---|---:|---:|---:|
+| `FALSE` | 0.774 | 0.768 | 0.818 |
+| `TRUE` | 0.674 | 0.672 | 0.753 |
+
+Interpretation:
+
+- Removing the setup-time lavaan pass trims about `0.10s` / `13%` from this local
+  100-SNP/12-trait `Q_SNP=TRUE` synthetic run.
+- The larger point is dependency removal rather than the startup win: supported Rust-backed
+  `userGWAS()` runs no longer need lavaan at all on their execution path.

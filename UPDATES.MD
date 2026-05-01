@@ -9,6 +9,8 @@ unsupported inputs.
 ### Model fitting
 
 - Added batched Rust SEM solvers for supported `commonfactorGWAS()` and `userGWAS()` DWLS models.
+- Added a native `userGWAS()` fast-path compiler and initializer so supported Rust-backed models no
+  longer require a lavaan setup pass before the batch fit.
 - Added support for the practical lavaan syntax used by the public p-factor workflow, including
   inequality constraints such as `a > .001`.
 - Kept the existing R result shape, `Q_SNP` behavior, `sub=` extraction, and lavaan fallback path.
