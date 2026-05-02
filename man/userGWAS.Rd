@@ -35,7 +35,3 @@ userGWAS(covstruc=NULL,SNPs=NULL,estimation="DWLS",model="",printwarn=TRUE,sub=F
 }
 
 
-
-\examples{
-
-}

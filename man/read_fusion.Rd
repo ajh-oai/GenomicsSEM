@@ -5,8 +5,8 @@
 Function to format TWAS summary statistics for T-SEM
 }
 \usage{
-read_fusion(files,trait.names=NULL,binary=NULL,N=NULL,perm=FALSE, \dots)
-
+read_fusion(files, trait.names = NULL, binary = NULL, N = NULL,
+            perm = FALSE)
 }
 \arguments{
    \item{files}{List of FUSION files.}
@@ -24,7 +24,3 @@ read_fusion(files,trait.names=NULL,binary=NULL,N=NULL,perm=FALSE, \dots)
 }
 
 
-
-\examples{
-
-}

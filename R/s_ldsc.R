@@ -142,7 +142,7 @@ s_ldsc <- function(traits,sample.prev=NULL,population.prev=NULL,ld,wld,frq,trait
   .LOG("Reading in annotation files. This step may take a few minutes.", file=log.file)
   
   for(i in 1:length(annot.files)){
-    header <- suppressMessages(read.table(annot.files[i], header = TRUE, nrow = 1))
+    header <- suppressMessages(read.table(annot.files[i], header = TRUE, nrows = 1))
     if(Operating == "Darwin"){
       annot <- suppressMessages(fread(input=paste("gzcat",annot.files[i]),skip=1,header=FALSE,showProgress=F,data.table=F))}
     if(Operating == "Windows"){

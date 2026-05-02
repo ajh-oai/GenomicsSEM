@@ -37,7 +37,6 @@ matching the scaling of \code{S}.}
 
 \item{nfactors}{Number of factors to extract in factor analysis if \code{fa = TRUE}. Default is \code{1}.}
 
-\item{only.values}{Logical. If \code{TRUE}, only eigenvalues are returned. Default is \code{FALSE}.}
 }
 \value{
 A list containing observed eigenvalues, simulated eigenvalue distributions, and the suggested number of factors/components to extract.
@@ -69,5 +68,5 @@ de la Fuente, J., & Tucker-Drob, E. M. (2023). *paLDSC: Parallel Analysis Based 
 Horn, J. L. (1965). A rationale and test for the number of factors in factor analysis. *Psychometrika*, 30(2), 179–185.
 }
 \seealso{
-\link[psych]{fa.parallel}, \link[stats]{eigen}
+\code{psych::fa.parallel}, \link[base]{eigen}
 }

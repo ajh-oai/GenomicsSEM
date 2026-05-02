@@ -9,15 +9,6 @@ rgmodel(LDSCoutput)
 \arguments{
 \item{LDSCoutput}{A list output from `ldsc()` containing genetic covariance matrices and related data.}
 
-\item{model}{A lavaan-style syntax string or list of character vectors specifying the structural equation model.}
-
-\item{std.lv}{Logical; whether to standardize latent variances. Default is TRUE.}
-
-\item{estimation}{Logical; whether to estimate parameters. Default is TRUE.}
-
-\item{sub}{Optional character vector to subset phenotypes in the model.}
-
-\item{...}{Additional arguments passed to `usermodel()`.}
 }
 \value{
 A list containing an updated LDSC object with the following elements:
@@ -31,14 +22,12 @@ A list containing an updated LDSC object with the following elements:
   \item{S_Stand}{Standardized genetic covariance matrix, if present in input.}
   \item{R}{Genetic correlation matrix.}
   \item{V_R}{Sampling covariance matrix of the genetic correlation matrix.}
-  \item{modelResults}{Output list from `usermodel()` if estimation = TRUE, containing parameter estimates.}
+  \item{modelResults}{Output list from the internal saturated-model fit.}
 }
 }
 \description{
 `rgmodel` uses LDSC-derived output from Genomic SEM's multivariable LD Score regression (`ldsc()`)
-to estimate a genetic covariance structure using a user-specified structural equation model.
-The function takes an object from `ldsc()` and returns an expanded list including covariance matrices,
-intercepts, sample sizes, and model results.
+to estimate a saturated genetic correlation matrix and return an expanded LDSC-style object.
 }
 \seealso{
 \code{\link{usermodel}}, and the full tutorial at \url{https://rpubs.com/JaFuente/rgmodel}

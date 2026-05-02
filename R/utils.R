@@ -89,10 +89,7 @@ If the Neff value is halved in the summary stats, but not recognized by the mung
   return(hold_names)
 }
 
-#function to rearrange the sampling covariance matrix from original order to lavaan's order:
-#'k' is the number of variables in the model
-#'fit' is the fit function of the regression model
-#'names' is a vector of variable names in the order you used
+# Function to rearrange the sampling covariance matrix from original order to lavaan's order.
 .rearrange <- function (k, fit, names) {
     order1 <- names
     order2 <- rownames(inspect(fit)[[1]]) #order of variables

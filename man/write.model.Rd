@@ -5,7 +5,8 @@
 Function to automate writing model syntax based on EFA loadings. This is most likely to be useful when examining larger numbers of traits (e.g., > 10).
 }
 \usage{
-write.model(Loadings,S_LD,cutoff,fix_resid=TRUE,bifactor=FALSE,mustload=FALSE,common=FALSE, \dots)
+write.model(Loadings, S_LD, cutoff, fix_resid = TRUE, bifactor = FALSE,
+            mustload = FALSE, common = FALSE)
 }
 \arguments{
    \item{Loadings}{The matrix of EFA loadings. Note that the number of columns in this matrix determines how many factors are specifeid in the model.}
@@ -22,7 +23,3 @@ write.model(Loadings,S_LD,cutoff,fix_resid=TRUE,bifactor=FALSE,mustload=FALSE,co
 }
 
 
-
-\examples{
-
-}

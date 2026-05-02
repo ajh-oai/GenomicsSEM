@@ -5,8 +5,7 @@
 Function to run a common factor model based on output from multivariable LDSC
 }
 \usage{
-commonfactor(covstruc,estimation="DWLS", \dots)
-
+commonfactor(covstruc, estimation = "DWLS")
 }
 \arguments{
    \item{covstruc}{Output from the multivariable LDSC function of Genomic SEM}
@@ -21,7 +20,3 @@ commonfactor(covstruc,estimation="DWLS", \dots)
    \item{results}{Parameter estimates and sandwich corrected standard errors from the specified model.}
 }
 
-
-\examples{
-
-}

@@ -144,7 +144,7 @@ Please note that this is likely effective sample size cut in half. The function 
   }
  
   #Compute Z score
-  file$Z <- sign(file$effect) * sqrt(qchisq(file$P,1,lower=F))
+  file$Z <- sign(file$effect) * sqrt(qchisq(file$P, 1, lower.tail = FALSE))
   
   ##filter on INFO column at designated threshold provided for the info.filter argument (default = 0.9)
   if("INFO" %in% colnames(file)) {

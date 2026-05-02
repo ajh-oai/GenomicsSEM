@@ -5,8 +5,9 @@
 Function to take output from multivariable S-LDSC and estimate enrichment of model parameter for user specified model
 }
 \usage{
-enrich(s_covstruc, model = "",params,fix= "regressions",std.lv=FALSE,rm_flank=TRUE,tau=FALSE,base=TRUE,toler=NULL,fixparam=NULL, \dots)
-
+enrich(s_covstruc, model = "", params, fix = "regressions",
+       std.lv = FALSE, rm_flank = TRUE, tau = FALSE, base = TRUE,
+       toler = NULL, fixparam = NULL)
 }
 \arguments{
    \item{s_covstruc}{Output from the multivariable S-LDSC function of Genomic SEM (s_ldsc)}
@@ -27,7 +28,3 @@ enrich(s_covstruc, model = "",params,fix= "regressions",std.lv=FALSE,rm_flank=TR
 }
 
 
-
-\examples{
-
-}

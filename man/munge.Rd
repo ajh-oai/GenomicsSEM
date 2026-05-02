@@ -5,8 +5,9 @@
 Function to process GWAS summary statistis files and prepair them for LD score regression 
 }
 \usage{
-munge(files,hm3,trait.names=NULL,N,info.filter = .9,maf.filter=0.01, column.names=list(),parallel=FALSE,cores=NULL,overwrite=TRUE \dots)
-
+munge(files, hm3, trait.names = NULL, N = NULL, info.filter = .9,
+      maf.filter = 0.01, log.name = NULL, column.names = list(),
+      parallel = FALSE, cores = NULL, overwrite = TRUE)
 }
 \arguments{
    \item{files}{A vector of file names, files must be located in the working directory, or a path must be provided.}
@@ -15,6 +16,7 @@ munge(files,hm3,trait.names=NULL,N,info.filter = .9,maf.filter=0.01, column.name
    \item{N}{A vector of sample size}
    \item{info.filter}{Numeric value which is used as a lower bound for inputation quality (INFO)}
    \item{maf.filter}{Numeric value used as a lower bound for minor allel frequency}
+   \item{log.name}{Optional prefix for the generated log file.}
    \item{column.names}{Optional list detailing which columns represent, SNP, MAF, etc. e.g. list(SNP=my_snp_column)}
    \item{parallel}{Indicates whether munge should process the summary statistics files in parallel or serial fashion. Default is TRUE, indicating that it will run in parallel.}
    \item{cores}{Indicates how many cores to use when running in parallel. The default is NULL, in which case munge will use 1 less than the total number of cores available in the local environment.}
@@ -27,7 +29,3 @@ munge(files,hm3,trait.names=NULL,N,info.filter = .9,maf.filter=0.01, column.name
 }
 
 
-
-\examples{
-
-}

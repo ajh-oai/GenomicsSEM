@@ -36,7 +36,7 @@ read_fusion <- function(files,trait.names=NULL,binary=NULL,N=NULL,perm=FALSE){
     #set to lowest possible empirical p-value given number of iteratations if empirical p = 0
     files[[i]]$PERM.PV<-ifelse(files[[i]]$PERM.PV ==0, 1/files[[i]]$PERM.N,files[[i]]$PERM.PV)
     
-    files[[i]]$Z.perm <- sign(files[[i]]$TWAS.Z) * sqrt(qchisq(files[[i]]$PERM.PV,1,lower=F))
+    files[[i]]$Z.perm <- sign(files[[i]]$TWAS.Z) * sqrt(qchisq(files[[i]]$PERM.PV, 1, lower.tail = FALSE))
     }
     
     if(binary[i] == TRUE){

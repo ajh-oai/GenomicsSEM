@@ -13,7 +13,6 @@
 #' @param fm Factor extraction method used when \code{fa = TRUE}. Default is \code{"minres"}. See \code{psych::fa.parallel()}.
 #' @param nfactors Number of factors to extract in factor analysis if \code{fa = TRUE}. Default is \code{1}.
 #' @param save.pdf Logical. Whether to save scree plots to a PDF file. Default is \code{FALSE}.
-#' @param only.values Logical. If \code{TRUE}, only eigenvalues are returned. Default is \code{FALSE}.
 #'
 #' @details
 #' This method adapts Horn’s (1965) classic parallel analysis approach to LDSC-based genomic data. Eigenvalues from the observed LDSC-derived matrix are compared against distributions of eigenvalues simulated under the null model using the multivariate LDSC sampling distribution. The number of components to retain is determined by comparing each observed eigenvalue to the corresponding percentile threshold from the simulated distribution.
@@ -39,7 +38,7 @@
 #' paLDSC(S = LDSCoutputfull$S_Stand, V = LDSCoutputfull$V_Stand, r = 10)
 #' }
 #'
-#' @seealso \link[psych]{fa.parallel}, \link[stats]{eigen}
+#' @seealso \code{psych::fa.parallel}, \link[base]{eigen}
 #'
 #' @export
 paLDSC <- function(S = S, V = V, r = NULL, p = NULL, save.pdf = F, diag = F, fa = F,

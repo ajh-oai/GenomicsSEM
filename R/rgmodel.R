@@ -1,16 +1,9 @@
 #' Estimate a model-implied genetic covariance matrix
 #'
 #' `rgmodel` uses LDSC-derived output from Genomic SEM's multivariable LD Score regression (`ldsc()`)
-#' to specify and estimate a saturated genetic correlation matrix using the usermodel function.
-#' The function takes an object from `ldsc()` and returns an expanded list that includes the
-#' genetic correlation matrix (R) and its sampling covariance matrix (V_R).
+#' to estimate a saturated genetic correlation matrix and return an expanded LDSC-style object.
 #'
 #' @param LDSCoutput A list output from `ldsc()` containing genetic covariance matrices and related data.
-#' @param model A lavaan-style syntax string or list of character vectors specifying the structural equation model.
-#' @param std.lv Logical; whether to standardize latent variances. Default is TRUE.
-#' @param estimation Logical; whether to estimate parameters. Default is TRUE.
-#' @param sub Optional character vector to subset phenotypes in the model.
-#' @param ... Additional arguments passed to `usermodel()`.
 #'
 #' @return A list containing an updated LDSC object with the following elements:
 #' \describe{
@@ -23,16 +16,13 @@
 #'   \item{S_Stand}{Standardized genetic covariance matrix, if present in input.}
 #'   \item{R}{Genetic correlation matrix.}
 #'   \item{V_R}{Sampling covariance matrix of the genetic correlation matrix.}
-#'   \item{modelResults}{Output list from `usermodel()` if estimation = TRUE, containing parameter estimates.}
+#'   \item{modelResults}{Output list from the internal saturated-model fit.}
 #' }
 #'
 #'
 #' @seealso \code{\link{usermodel}}, and the full tutorial at \url{https://rpubs.com/JaFuente/rgmodel}
 #'
 #' @export
-rgmodel <- function(LDSCoutput, model, std.lv = TRUE, estimation = TRUE, sub = NULL, ...) {
-  # your existing rgmodel function code here
-}
 rgmodel <- function(LDSCoutput) {
   # Load required packages
   list.of.packages <- c("data.table", "GenomicSEM","dplyr","stringr","stringr","simsalapar","gdata","Matrix","lavaan")

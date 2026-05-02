@@ -104,7 +104,6 @@ attribute to confirm which path a run used.
 
 ## Release Work Still Worth Doing
 
-- Normalize package/version messaging across `DESCRIPTION`, `README.md`, and `PATCHNOTES.md`.
 - Add clean-checkout CI for Linux, macOS, Windows, `R CMD check`, and `cargo test`.
 - Expand golden compatibility fixtures across supported fast-path syntax and fallback cases.
 - Decide which fast paths should be default-on versus explicitly experimental in the first public

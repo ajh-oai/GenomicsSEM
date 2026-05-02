@@ -4,10 +4,9 @@ Title: Structural equation modeling based on GWAS summary statistics
 Version: 0.0.5
 Author: Andrew Grotzinger, Matthijs van der Zee, Mijke Rhemtulla, Hill Ip, Michel Nivard, Elliot Tucker-Drob
 Maintainer: Andrew Grotzinger <agrotzin@utexas.edu>
-Description: Later
-License: GPL-3.0
+Description: Fits structural equation models to GWAS summary statistics and provides utilities for LD score regression preprocessing, multivariate GWAS, transcriptome-wide analyses, and optional Rust-backed acceleration for supported workflows.
+License: GPL-3 | file LICENSE
 Encoding: UTF-8
-LazyData: true
-Imports: plyr,e1071,readr,gdata,lavaan,doParallel,parallel,foreach,data.table,stringr,splitstackshape,Matrix,R.utils,dplyr,iterators,Rcpp,utils,mgsub
+Imports: plyr,e1071,readr,gdata,lavaan,doParallel,parallel,foreach,data.table,stringr,splitstackshape,Matrix,R.utils,dplyr,iterators,Rcpp,utils,mgsub,ggpubr,Rmpfr,tidyr
 SystemRequirements: Cargo (Rust toolchain)
 RoxygenNote: 7.2.3

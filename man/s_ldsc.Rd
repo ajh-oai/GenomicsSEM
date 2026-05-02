@@ -5,8 +5,9 @@
 Function to run Stratified LD score regression.
 }
 \usage{
-s_ldsc(traits,sample.prev=NULL,population.prev=NULL,ld,wld,frq,trait.names=NULL,n.blocks=200,ldsc.log=NULL,exclude_cont=TRUE, \dots)
-
+s_ldsc(traits, sample.prev = NULL, population.prev = NULL, ld, wld, frq,
+       trait.names = NULL, n.blocks = 200, ldsc.log = NULL,
+       exclude_cont = TRUE)
 }
 \arguments{
    \item{traits}{A vector of file names which point to  LDSC munged files for trait you want to include.}
@@ -35,7 +36,3 @@ s_ldsc(traits,sample.prev=NULL,population.prev=NULL,ld,wld,frq,trait.names=NULL,
 }
 
 
-
-\examples{
-
-}

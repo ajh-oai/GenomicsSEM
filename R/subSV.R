@@ -8,12 +8,12 @@ subSV <- function(LDSC_OBJECT = NULL, SMATRIX = NULL, VMATRIX = NULL, INDEXVALS,
   #If LDSCOBJECT is not provided, check for the presence of SMATRIX and VMATRIX
   if (is.null(LDSC_OBJECT)) {
     #If VMATRIX is provided but SMATRIX is not
-    if (!is.null(VMATRIX) & is.null(RMATRIX)) {
+    if (!is.null(VMATRIX) & is.null(SMATRIX)) {
       warning("You forgot to enter the SMATRIX!")
     }
     
     # If SMATRIX is provided but VMATRIX is not
-    if (!is.null(RMATRIX) & is.null(VMATRIX)) {
+    if (!is.null(SMATRIX) & is.null(VMATRIX)) {
       warning("You forgot to enter the VMATRIX!")
     }
   }

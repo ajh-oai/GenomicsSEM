@@ -6,7 +6,7 @@ Given a set of parameter values from Genomic SEM models, calculate the extent to
 }
 
 \usage{
- localSRMD(unconstrained, constrained, lhsvar, rhsvar, \dots)
+localSRMD(unconstrained, constrained, lhsvar, rhsvar)
 }
 
 \arguments{  
@@ -22,7 +22,3 @@ Given a set of parameter values from Genomic SEM models, calculate the extent to
 }
 
 
-
-\examples{
-
-}

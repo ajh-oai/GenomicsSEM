@@ -5,8 +5,7 @@
 Function to expand the S and V matrices to include multiple SNP effects in a single matrix, along with LD information across these SNPs. 
 }
 \usage{
-multiSNP (covstruc, SNPs, LD, SNPSE = FALSE, SNPlist = NA, \dots)
-
+multiSNP(covstruc, SNPs, LD, SNPSE = FALSE, SNPlist = NA)
 }
 \arguments{
    \item{covstruc}{Output from Genomic SEM multivariable LDSC}
@@ -22,7 +21,3 @@ multiSNP (covstruc, SNPs, LD, SNPSE = FALSE, SNPlist = NA, \dots)
 }
 
 
-
-\examples{
-
-}
