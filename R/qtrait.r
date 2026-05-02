@@ -65,11 +65,6 @@ QTrait <- function(LDSCoutput,indicators,traits,
                    lsrmr=.25,lsrmrthreshold = .10,
                    save.plots=TRUE,stdout = TRUE){
   suppressWarnings({
-  #Load required packages  
-  list.of.packages <- c("data.table","GenomicSEM","ggplot2","ggrepel","corrplot","dplyr")
-  new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
-  if(length(new.packages)) stop("Missing package(s) ", paste0(new.packages, collapse=" and "))
-  lapply(list.of.packages, library,character.only = TRUE)
   # Load LDSC output
   # check if variable is a file path
   if(is.character(LDSCoutput)) {

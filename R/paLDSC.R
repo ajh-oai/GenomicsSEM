@@ -43,10 +43,6 @@
 #' @export
 paLDSC <- function(S = S, V = V, r = NULL, p = NULL, save.pdf = F, diag = F, fa = F,
                    fm = NULL, nfactors = NULL) {
-  list.of.packages <- c("ggplot2", "MASS","matrixStats","gdata","psych","matrixStats","egg","ggpubr","Matrix")
-  new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
-  if(length(new.packages)) install.packages(new.packages)
-  invisible(lapply(list.of.packages, library,character.only = TRUE))
   if (is.null(r)){
     r <- 500
   }

@@ -1,0 +1,20 @@
+utils::globalVariables(c(
+  "eigenvalue",
+  ".data",
+  "highlight",
+  "Indicator",
+  "num",
+  "n",
+  "Predictors",
+  "rGs",
+  "SEs",
+  "SEss",
+  "slope",
+  "SNP",
+  "type",
+  "Value",
+  "Variable",
+  "Z",
+  "Z.x",
+  "Z.y"
+))

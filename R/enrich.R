@@ -104,6 +104,10 @@ enrich <-function(s_covstruc, model = "",params,fix= "regressions",std.lv=FALSE,
   if(std.lv == TRUE){
     empty2<-.tryCatch.W.E(ReorderModel1 <- sem(Model1, sample.cov = S_LD, estimator = "DWLS", se="standard", WLS.V = W, sample.nobs = 2,warn=FALSE,std.lv=TRUE, optim.dx.tol = .01,optim.force.converged=TRUE))
   }
+
+  latent_cor <- lavInspect(ReorderModel1, "cor.lv")
+  r <- nrow(latent_cor)
+  lat_labs <- rownames(latent_cor)
   
   if(class(empty2$value)[1] != "lavaan"){
     latentcorr<-grepl("not defined:", empty2$value$message[1][1])

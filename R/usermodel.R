@@ -308,11 +308,11 @@ usermodel <- function (covstruc, estimation = "DWLS", model = "", CFIcalc=TRUE,
         for(p in 1:nrow(indices)){
           
           #pull indicators for first factor
-          lv1_ind<-subset(Model_Output_lv, Model_Output_lv$lhs == row_lv[p] & op == "=~")
+          lv1_ind<-subset(Model_Output_lv, Model_Output_lv$lhs == row_lv[p] & Model_Output_lv$op == "=~")
           lv1_ind<-lv1_ind$rhs
           
           #pull out indicators for second factor
-          lv2_ind<-subset(Model_Output_lv, Model_Output_lv$lhs == col_lv[p] & op == "=~")
+          lv2_ind<-subset(Model_Output_lv, Model_Output_lv$lhs == col_lv[p] & Model_Output_lv$op == "=~")
           lv2_ind<-lv2_ind$rhs
           
           #subset the residual matrix to those indicators

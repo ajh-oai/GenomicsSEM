@@ -328,7 +328,7 @@ rgmodel <- function(LDSCoutput) {
           
         }else{se.ghost<-NA
         if(":=" %in% Model_Output$op & is.na(se.ghost[1])){
-          se.ghost<-rep("SE could not be computed", count(":=" %in% Model_Output$op)$freq)
+          se.ghost<-rep("SE could not be computed", plyr::count(":=" %in% Model_Output$op)$freq)
           ghost<-subset(Model_Output, Model_Output$op == ":=")[,c(2:4,8,11,14)]
           ghost2<-cbind(ghost,se.ghost)
           colnames(ghost2)[7]<-"SE"}else{}}
@@ -590,7 +590,7 @@ rgmodel <- function(LDSCoutput) {
               colnames(ghost2_stand)[7]<-"SE_stand"
             }else{
               if(":=" %in% Model_Stand$op & (NA %in% Model_Stand$se)){
-                se.ghost_stand<-rep("SE could not be computed", count(":=" %in% Model_Stand$op)$freq)
+                se.ghost_stand<-rep("SE could not be computed", plyr::count(":=" %in% Model_Stand$op)$freq)
                 ghost_stand<-subset(Model_Stand, Model_Stand$op == ":=")[,c(2:4,8,11,14)]
                 ghost2_stand<-cbind(ghost_stand,se.ghost_stand)
                 colnames(ghost2_stand)[7]<-"SE_stand"}else{}}

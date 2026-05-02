@@ -80,10 +80,6 @@ simLDSC <- function(covmat,N,seed,ld,rPheno=NULL,int=NULL,N_overlap=.99,r=1,gzip
   if (is.numeric(r)) {if (r < 1) stop("argument r should be equal to or greater than 1")}
   if (!is.numeric(seed)) stop("argument seed should be numeric")
   if (!(gzip_output %in% c(TRUE, FALSE))) stop("argument gzip_output should be TRUE or FALSE")
-  list.of.packages <- c("data.table","readr","GenomicSEM","R.utils","MASS","tictoc","lavaan","doParallel","tictoc")
-  new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
-  if(length(new.packages)) stop("Missing package(s) ", paste0(new.packages, collapse=" and "))
-  lapply(list.of.packages, library,character.only = TRUE)
   ld_path<-ld
   chr <- 22
   cat("--------------------","\n"," Reading LD scores","\n","--------------------","\n", sep ="")

@@ -7,6 +7,7 @@ Maintainer: Andrew Grotzinger <agrotzin@utexas.edu>
 Description: Fits structural equation models to GWAS summary statistics and provides utilities for LD score regression preprocessing, multivariate GWAS, transcriptome-wide analyses, and optional Rust-backed acceleration for supported workflows.
 License: GPL-3 | file LICENSE
 Encoding: UTF-8
-Imports: plyr,e1071,readr,gdata,lavaan,doParallel,parallel,foreach,data.table,stringr,splitstackshape,Matrix,R.utils,dplyr,iterators,Rcpp,utils,mgsub,ggpubr,Rmpfr,tidyr
+Imports: plyr,readr,gdata,lavaan,doParallel,parallel,foreach,data.table,stringr,Matrix,R.utils,dplyr,iterators,utils,ggpubr,Rmpfr,tidyr,ggplot2,MASS,matrixStats,psych,tictoc
+Suggests: doMPI
 SystemRequirements: Cargo (Rust toolchain)
 RoxygenNote: 7.2.3

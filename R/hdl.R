@@ -17,11 +17,12 @@ hdl <- function(traits,sample.prev=NA,population.prev=NA,trait.names=NULL,LD.pat
   if(any(grepl(x = LD.files, pattern = "UKB_snp_counter.*"))){
     snp_counter_file <- LD.files[grep(x = LD.files, pattern = "UKB_snp_counter.*")]
     snp_list_file <- LD.files[grep(x = LD.files, pattern = "UKB_snp_list.*")]
-    load(file=paste(LD.path, snp_counter_file, sep = "/"))
-    load(file=paste(LD.path, snp_list_file, sep = "/"))
-    if("nsnps.list.imputed" %in% ls()){
-      snps.name.list <- snps.list.imputed.vector
-      nsnps.list <- nsnps.list.imputed
+    ld_index_env <- new.env(parent = emptyenv())
+    load(file = paste(LD.path, snp_counter_file, sep = "/"), envir = ld_index_env)
+    load(file = paste(LD.path, snp_list_file, sep = "/"), envir = ld_index_env)
+    if (exists("nsnps.list.imputed", envir = ld_index_env, inherits = FALSE)) {
+      snps.name.list <- get("snps.list.imputed.vector", envir = ld_index_env, inherits = FALSE)
+      nsnps.list <- get("nsnps.list.imputed", envir = ld_index_env, inherits = FALSE)
     }
   } else{
     error.message <- "It seems this directory does not contain all files needed for HDL. Please check your LD.path again. The version of HDL implementerd in GenomicSEM only support pre-computed LD reference panels."
@@ -139,7 +140,11 @@ cat("\n")
       for (piece in 1:k) {
         LD_rda_file <- LD.files[grep(x = LD.files, pattern = paste0("chr", chr, ".", piece, ".*rda"))]
         LD_bim_file <- LD.files[grep(x = LD.files, pattern = paste0("chr", chr, ".", piece, ".*bim"))]
-        load(file = paste(LD.path, LD_rda_file, sep = "/"))
+        ld_piece_env <- new.env(parent = emptyenv())
+        load(file = paste(LD.path, LD_rda_file, sep = "/"), envir = ld_piece_env)
+        LDsc <- get("LDsc", envir = ld_piece_env, inherits = FALSE)
+        lam <- get("lam", envir = ld_piece_env, inherits = FALSE)
+        V <- get("V", envir = ld_piece_env, inherits = FALSE)
         snps.ref.df <- read.table(paste(LD.path, LD_bim_file, 
                                         sep = "/"))
         colnames(snps.ref.df) <- c("chr", "id", "non", "pos", "A1", "A2")
@@ -292,7 +297,11 @@ cat("\n")
     for (piece in 1:k) {
       LD_rda_file <- LD.files[grep(x = LD.files, pattern = paste0("chr", chr, ".", piece, ".*rda"))]
       LD_bim_file <- LD.files[grep(x = LD.files, pattern = paste0("chr", chr, ".", piece, ".*bim"))]
-      load(file = paste(LD.path, LD_rda_file, sep = "/"))
+      ld_piece_env <- new.env(parent = emptyenv())
+      load(file = paste(LD.path, LD_rda_file, sep = "/"), envir = ld_piece_env)
+      LDsc <- get("LDsc", envir = ld_piece_env, inherits = FALSE)
+      lam <- get("lam", envir = ld_piece_env, inherits = FALSE)
+      V <- get("V", envir = ld_piece_env, inherits = FALSE)
       snps.ref.df <- read.table(paste(LD.path, LD_bim_file, sep = "/"))
       colnames(snps.ref.df) <- c("chr", "id", "non", "pos", "A1", "A2")
       snps.ref <- snps.ref.df$id
@@ -397,7 +406,11 @@ cat("\n")
                bstar1=unlist(bstar1.v), bstar2=unlist(bstar2.v),
                lim=exp(-18), method ='L-BFGS-B', lower=c(-1,-10), upper=c(1,10))
   if(opt$convergence != 0){
-    starting.value.v <- c(0,-sqrt(h11*h22)*0.5, sqrt(h11*h22)*0.5)
+    starting.value.v <- c(
+      0,
+      -sqrt(h11.hdl[1] * h22.hdl[1]) * 0.5,
+      sqrt(h11.hdl[1] * h22.hdl[1]) * 0.5
+    )
     k <- 1
     while(opt$convergence != 0){
       starting.value <- starting.value.v[k]

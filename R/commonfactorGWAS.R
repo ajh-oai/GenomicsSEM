@@ -289,7 +289,10 @@ output from ldsc (using covstruc = ...)  followed by the output from sumstats (u
     }
     if(MPI){
       #register MPI
-      cl <- getMPIcluster()
+      if (!requireNamespace("doMPI", quietly = TRUE)) {
+        stop("MPI=TRUE requires the optional doMPI package.")
+      }
+      cl <- getExportedValue("doMPI", "getMPIcluster")()
       #register cluster; no makecluster as ibrun already starts the MPI process.
       registerDoParallel(cl)
     } else {
