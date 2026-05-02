@@ -24,6 +24,30 @@ not just the per-file transforms.
 
 The upstream repo does not include a runnable benchmark suite or bundled benchmark data. Its existing performance references are in `README.md` and `PATCHNOTES.md`, including 100K-SNP and 1.8M-SNP `userGWAS` timings. This synthetic workflow benchmark is meant to be a reproducible stand-in for those workloads, not a biological validation dataset.
 
+## Current Results
+
+The current clean-clone benchmark medians show the largest prep-engine gains once work is batched
+across traits and moved out of the R orchestration layer:
+
+| Workflow | Old path | New path | Speedup |
+|---|---:|---:|---:|
+| `sumstats()`, 4 files x 100k SNPs | `2.449s` legacy serial | `0.076s` native batch, 4 threads | `32.2x` |
+| `munge()`, 4 files x 100k SNPs | `3.628s` legacy serial | `0.375s` native batch, 4 threads | `9.7x` |
+
+The synthetic SEM workflow harnesses also show that the Rust-backed fitting paths remove most of
+the old lavaan-loop cost while preserving the same workflow shape:
+
+| Workflow | Old path | New path | Speedup |
+|---|---:|---:|---:|
+| `userGWAS(Q_SNP=TRUE)`, 1 core/thread | `36.321s` | `0.669s` | `54.3x` |
+| `userGWAS(Q_SNP=TRUE)`, 4 cores/threads | `10.415s` | `0.522s` | `20.0x` |
+| `commonfactorGWAS()`, 1 core/thread | `86.470s` | `0.228s` | `379x` |
+| `commonfactorGWAS()`, 4 cores/threads | `24.045s` | `0.059s` | `408x` |
+
+These are synthetic, reproducible workflow benchmarks. The public-data and paper-shaped workflow
+comparisons are summarized separately in [`repro/README.md`](../repro/README.md), and the full
+timestamped history lives in [`BENCHMARK_LOG.md`](BENCHMARK_LOG.md).
+
 Example commands:
 
 ```sh

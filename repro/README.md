@@ -12,6 +12,22 @@ large public-data practical workflow.
 | `pfactor_practical_1m.R` | Real public-data 1M-SNP practical workflow with bounded old-vs-new equivalence checks and a full Rust-backed scan | This is a public tutorial/practical workflow, not a paper reproduction |
 | `pfactor_old_lavaan_scaling.R` | Bounded legacy lavaan scaling study used to project the old 1M-SNP runtime | Projection rather than a literal full old 1M run |
 
+## Results Summary
+
+| Harness | Comparison | Old path | New path | Speedup |
+|---|---|---:|---:|---:|
+| Grotzinger et al. 2019 NHB | paper-shaped `userGWAS(Q_SNP=TRUE, sub="F1~SNP")`, 1 core/thread | `24.259s` | `1.013s` | `23.9x` |
+| Grotzinger et al. 2019 NHB | paper-shaped `commonfactorGWAS()`, 1 core/thread | `53.927s` | `0.056s` | `963x` |
+| Grotzinger et al. 2025 Nature | paper-shaped five-factor `userGWAS(Q_SNP=TRUE)`, 1 core/thread | `14.628s` | `1.968s` | `7.4x` |
+| Public p-factor practical | public-data `sumstats()` on 1,291,369 aligned SNPs | `40.821s` | `9.816s` | `4.2x` |
+| Public p-factor practical | 1M-SNP constrained `userGWAS()` model fit | `3.363 h` projected old lavaan | `12.380s` measured Rust-backed | `978.1x` projected |
+
+Interpretation matters here:
+
+- the 2019 harness includes an exact no-SNP reproduction, then benchmarks the published SNP-workflow shape;
+- the 2025 harness is a same-input paper-shaped benchmark because the full unrounded sampling covariance matrix is not public;
+- the p-factor practical is a public tutorial workflow, and its 1M-SNP legacy number is a fitted projection from bounded old-path runs rather than a literal full old scan.
+
 ## Grotzinger et al. 2019, Nature Human Behaviour
 
 `grotzinger_2019_nhb.R` uses the published psychiatric common-factor example from the GenomicSEM wiki / CNS Genomics practical:
@@ -45,7 +61,9 @@ Recorded result from the current benchmark log:
 - exact no-SNP `usermodel()` reproduction matched the practical with max absolute difference
   `2.611839e-06`;
 - on the paper-shaped SNP workflow, `userGWAS(Q_SNP=TRUE, sub="F1~SNP")` improved
-  `24.259s -> 1.013s` at one core, and `commonfactorGWAS()` improved `53.927s -> 0.056s`.
+  `24.259s -> 1.013s` at one core and `6.341s -> 0.954s` at four cores;
+- `commonfactorGWAS()` improved `53.927s -> 0.056s` at one core and
+  `13.897s -> 0.015s` at four cores.
 
 ## Grotzinger et al. 2025, Nature
 
@@ -77,7 +95,7 @@ Recorded result from the current benchmark log:
 - the public rounded five-factor `usermodel()` check is intentionally not marked equivalent to the
   paper fit because the full unrounded `V` matrix is not public;
 - on the paper-shaped 14-disorder workflow, `userGWAS(Q_SNP=TRUE)` improved
-  `14.628s -> 1.968s` at one core.
+  `14.628s -> 1.968s` at one core and `4.194s -> 0.847s` at four cores.
 
 ## Public p-Factor Practical, O(1M) SNPs
 
@@ -132,7 +150,8 @@ Recorded remote result from the current benchmark log:
 - `sumstats()` on 1,291,369 aligned public SNPs improved `40.821s -> 9.816s`;
 - the bounded 100-SNP old-vs-new `userGWAS()` check matched with max absolute numeric difference
   `1.8e-06`;
-- the full Rust-backed 1M-SNP scan completed in `12.380s` at 16 threads.
+- the full Rust-backed 1M-SNP scan completed in `81.752s` at one thread, `23.500s` at four threads,
+  and `12.380s` at 16 threads.
 
 To estimate the full old-lavaan 1M runtime without committing to the full slow run,
 `pfactor_old_lavaan_scaling.R` runs only the old `userGWAS()` lavaan path across bounded SNP
