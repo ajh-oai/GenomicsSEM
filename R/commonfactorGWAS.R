@@ -202,17 +202,7 @@ output from ldsc (using covstruc = ...)  followed by the output from sumstats (u
   fast_threads <- NA_integer_
   fast_fallback_reason <- NULL
   if(use_fast_commonfactor && !smooth_check && !MPI){
-    batch_threads <- 1L
-    if(parallel){
-      if(is.null(cores)){
-        batch_threads <- min(c(nrow(SNPs2), detectCores() - 1))
-      }else{
-        if (cores > nrow(SNPs2))
-          warning(paste0("Provided number of cores was greater than number of SNPs, reverting to cores=",nrow(SNPs2)))
-        batch_threads <- min(c(nrow(SNPs2), cores))
-      }
-      batch_threads <- max(1L, batch_threads)
-    }
+    batch_threads <- .fast_model_threads(parallel, cores, nrow(SNPs2))
     fast_threads <- batch_threads
 
     batch_fit <- .commonfactor_batch_fit_fast(

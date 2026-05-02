@@ -565,6 +565,52 @@ return(S_Full)
   as.integer(unname(out))
 }
 
+.fast_batch_threads <- function(option_name, parallel, cores, n.items) {
+  n.threads <- getOption(option_name, NA_integer_)[1]
+  if (is.null(n.threads) || is.na(n.threads)) {
+    if (isTRUE(parallel)) {
+      n.threads <- if (is.null(cores)) detectCores() - 1L else cores
+    } else {
+      n.threads <- 1L
+    }
+  }
+  if (is.na(n.threads) || n.threads <= 0L) {
+    n.threads <- 1L
+  }
+  as.integer(min(n.items, n.threads))
+}
+
+.fast_model_threads <- function(parallel, cores, n.rows) {
+  if (!isTRUE(parallel)) {
+    return(1L)
+  }
+
+  n.threads <- if (is.null(cores)) detectCores() - 1L else cores
+  if (!is.null(cores) && cores > n.rows) {
+    warning(paste0("Provided number of cores was greater than number of SNPs, reverting to cores=", n.rows))
+  }
+  as.integer(max(1L, min(n.rows, n.threads)))
+}
+
+.prep_batch_logs <- function(trait.names, parallel, log.file, suffix, sanitize = identity) {
+  if (!isTRUE(parallel)) {
+    return(rep(list(log.file), length(trait.names)))
+  }
+
+  lapply(sanitize(trait.names), function(trait.name) {
+    file(paste0(trait.name, suffix), open = "wt")
+  })
+}
+
+.prep_close_logs <- function(logs) {
+  for (this_log in logs) {
+    if (isOpen(this_log)) {
+      flush(this_log)
+      close(this_log)
+    }
+  }
+}
+
 .munge_fused_prepare <- function(filename, trait.name, N, ref, hm3, info.filter, maf.filter,
                                  column.names, overwrite, log.file, utilfuncs = NULL) {
   if (!.genomicssem_use_rust() || !isTRUE(getOption("GenomicSEM.fast_munge_engine", TRUE))) {
@@ -698,39 +744,20 @@ Please note that this is likely effective sample size cut in half. The function 
   invisible(list(used = TRUE))
 }
 
-.munge_batch_threads <- function(parallel, cores, n.files) {
-  n.threads <- getOption("GenomicSEM.fast_munge_threads", NA_integer_)[1]
-  if (is.null(n.threads) || is.na(n.threads)) {
-    if (isTRUE(parallel)) {
-      n.threads <- if (is.null(cores)) detectCores() - 1L else cores
-    } else {
-      n.threads <- 1L
-    }
-  }
-  if (is.na(n.threads) || n.threads <= 0L) {
-    n.threads <- 1L
-  }
-  as.integer(min(n.files, n.threads))
-}
-
 .munge_fused_batch_fast <- function(filenames, trait.names, N, ref, hm3, info.filter, maf.filter,
                                     column.names, overwrite, parallel, cores, log.file) {
   if (length(filenames) < 2L || !isTRUE(overwrite)) {
     return(NULL)
   }
-  prep_logs <- rep(list(log.file), length(filenames))
+  prep_logs <- .prep_batch_logs(
+    trait.names = trait.names,
+    parallel = parallel,
+    log.file = log.file,
+    suffix = "_munge.log",
+    sanitize = function(x) str_replace_all(x, fixed(" "), "")
+  )
   if (isTRUE(parallel)) {
-    prep_logs <- lapply(str_replace_all(trait.names, fixed(" "), ""), function(trait.name) {
-      file(paste0(trait.name, "_munge.log"), open = "wt")
-    })
-    on.exit({
-      for (this_log in prep_logs) {
-        if (isOpen(this_log)) {
-          flush(this_log)
-          close(this_log)
-        }
-      }
-    }, add = TRUE)
+    on.exit(.prep_close_logs(prep_logs), add = TRUE)
   }
   specs <- lapply(seq_along(filenames), function(i) {
     .munge_fused_prepare(filenames[i], trait.names[i], N[i], ref, hm3, info.filter, maf.filter,
@@ -740,7 +767,7 @@ Please note that this is likely effective sample size cut in half. The function 
     return(NULL)
   }
 
-  n.threads <- .munge_batch_threads(parallel, cores, length(specs))
+  n.threads <- .fast_batch_threads("GenomicSEM.fast_munge_threads", parallel, cores, length(specs))
   direct_gzip <- n.threads > 1L
   native_error <- NULL
   out <- tryCatch(
@@ -1004,40 +1031,20 @@ Please note that this is likely effective sample size cut in half. The function 
   output
 }
 
-.sumstats_batch_threads <- function(parallel, cores, n.files) {
-  n.threads <- getOption("GenomicSEM.fast_sumstats_threads", NA_integer_)[1]
-  if (is.null(n.threads) || is.na(n.threads)) {
-    if (isTRUE(parallel)) {
-      n.threads <- if (is.null(cores)) detectCores() - 1L else cores
-    } else {
-      n.threads <- 1L
-    }
-  }
-  if (is.na(n.threads) || n.threads <= 0L) {
-    n.threads <- 1L
-  }
-  as.integer(min(n.files, n.threads))
-}
-
 .sumstats_fused_batch_fast <- function(filenames, trait.names, N, keep.indel, OLS, betas,
                                        info.filter, linprob, se.logit, names.beta, names.se,
                                        ref, ref2, parallel, cores, log.file, direct.filter) {
   if (length(filenames) < 2L) {
     return(NULL)
   }
-  prep_logs <- rep(list(log.file), length(filenames))
+  prep_logs <- .prep_batch_logs(
+    trait.names = trait.names,
+    parallel = parallel,
+    log.file = log.file,
+    suffix = "_sumstats.log"
+  )
   if (isTRUE(parallel)) {
-    prep_logs <- lapply(trait.names, function(trait.name) {
-      file(paste0(trait.name, "_sumstats.log"), open = "wt")
-    })
-    on.exit({
-      for (this_log in prep_logs) {
-        if (isOpen(this_log)) {
-          flush(this_log)
-          close(this_log)
-        }
-      }
-    }, add = TRUE)
+    on.exit(.prep_close_logs(prep_logs), add = TRUE)
   }
   specs <- lapply(seq_along(filenames), function(i) {
     .sumstats_fused_prepare(
@@ -1062,7 +1069,7 @@ Please note that this is likely effective sample size cut in half. The function 
     return(NULL)
   }
 
-  n.threads <- .sumstats_batch_threads(parallel, cores, length(specs))
+  n.threads <- .fast_batch_threads("GenomicSEM.fast_sumstats_threads", parallel, cores, length(specs))
   native_error <- NULL
   out <- tryCatch(
     .Call(

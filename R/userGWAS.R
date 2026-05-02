@@ -192,17 +192,7 @@ userGWAS <- function(covstruc=NULL, SNPs=NULL, estimation="DWLS", model="", prin
 
   if(use_fast_usergwas && !is.null(fast_fit_spec) && isTRUE(fast_fit_spec$supported) &&
      !smooth_check && !MPI){
-    batch_threads <- 1L
-    if(parallel){
-      if(is.null(cores)){
-        batch_threads <- min(c(nrow(SNPs), detectCores() - 1))
-      }else{
-        if (cores > nrow(SNPs))
-          warning(paste0("Provided number of cores was greater than number of SNPs, reverting to cores=",nrow(SNPs)))
-        batch_threads <- min(c(cores, nrow(SNPs)))
-      }
-      batch_threads <- max(1L, batch_threads)
-    }
+    batch_threads <- .fast_model_threads(parallel, cores, nrow(SNPs))
     fast_threads <- batch_threads
 
     q_snp_info <- .sem_fast_q_snp_info(fast_fit_spec, model, S_LD, TWAS, Q_SNP)
