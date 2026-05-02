@@ -57,9 +57,9 @@ Other measured gains:
 |---|---|---:|---:|---:|
 | `sumstats()` | public p-factor data, 1,291,369 aligned SNPs, remote pod | 40.821 s | 9.816 s | 4.2x |
 | `sumstats()` | synthetic 100k SNP / 2-trait prep benchmark | 1.322 s | 0.139 s | 9.5x |
-| `sumstats()` | synthetic 100k SNP / 4-trait batched prep benchmark, clean-clone median | 2.546 s | 0.079 s | 32.2x |
+| `sumstats()` | synthetic 100k SNP / 4-trait batched prep benchmark, clean-clone median | 2.449 s | 0.076 s | 32.2x |
 | `munge()` | synthetic 100k SNP / 2-trait prep benchmark | 1.901 s | 0.433 s | 4.4x |
-| `munge()` | synthetic 100k SNP / 4-trait batched prep benchmark, clean-clone median | 3.834 s | 0.376 s | 10.2x |
+| `munge()` | synthetic 100k SNP / 4-trait batched prep benchmark, clean-clone median | 3.628 s | 0.375 s | 9.7x |
 
 ## What Was Reproduced
 

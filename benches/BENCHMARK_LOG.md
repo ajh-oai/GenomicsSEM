@@ -1533,3 +1533,62 @@ Clean-clone synthetic model-fit sanity rerun:
 
 - These local model-fit numbers are release-sanity reruns, not replacements for the stronger remote
   public-workflow measurements already recorded elsewhere in this log.
+
+## 2026-05-01 21:32 PDT - Post-cleanup clean-clone refresh
+
+Scope:
+
+- Refreshed the release-facing local benchmark figures after the package-hygiene work and the small
+  fast-path orchestration refactor in commit `48e4c3a`.
+- Cloned the current tree into `/private/tmp/genomicssem-refresh`, then reran the clean-clone cargo,
+  package-test, prep-batch, and synthetic model-fit checks from that fresh checkout.
+
+Validation:
+
+```sh
+cargo test --workspace
+R CMD INSTALL --install-tests .
+for test in tests/*.R; do Rscript "$test"; done
+Rscript benches/bench_sumstats_batch.R 100000 4 4 13
+Rscript benches/bench_munge_batch.R 100000 4 4 13
+Rscript benches/bench_usergwas_synthetic.R 1000 6 1,4 userGWAS 1 TRUE FALSE TRUE TRUE FALSE TRUE
+Rscript benches/bench_usergwas_synthetic.R 1000 6 1,4 commonfactorGWAS 1 TRUE FALSE TRUE TRUE TRUE FALSE
+```
+
+Clean-clone medians from three 4-file / 100k-SNP prep runs:
+
+| workflow | backend | threads | median_sec | checksum |
+|---|---|---:|---:|---:|
+| `sumstats()` | `legacy_serial` | 1 | 2.449 | 136514.8 |
+| `sumstats()` | `legacy_parallel` | 4 | 2.982 | 136514.8 |
+| `sumstats()` | `native_batch_1t` | 1 | 0.185 | 136514.8 |
+| `sumstats()` | `native_batch_threads` | 4 | 0.076 | 136514.8 |
+| `munge()` | `legacy_serial` | 1 | 3.628 | 4000669437 |
+| `munge()` | `legacy_parallel` | 4 | 3.066 | 4000669437 |
+| `munge()` | `native_batch_1t` | 1 | 0.808 | 4000669437 |
+| `munge()` | `native_batch_threads` | 4 | 0.375 | 4000669437 |
+
+Interpretation:
+
+- Current clean-clone median `sumstats()` speedup is `13.2x` at one native thread and `32.2x` at
+  four native workers versus the serial legacy path.
+- Current clean-clone median `munge()` speedup is `4.5x` at one native thread and `9.7x` at four
+  native workers versus the serial legacy path.
+- Checksums remain unchanged after the namespace cleanup and orchestration refactor; the observed
+  timing drift is ordinary local-run variance rather than a behavior change.
+
+Clean-clone synthetic model-fit sanity rerun:
+
+| workflow | backend | cores | elapsed_sec | checksum |
+|---|---|---:|---:|---:|
+| `userGWAS(Q_SNP=TRUE)` | `old_r_workflow` | 1 | 36.321 | 12660812 |
+| `userGWAS(Q_SNP=TRUE)` | `old_r_workflow` | 4 | 10.415 | 12660812 |
+| `userGWAS(Q_SNP=TRUE)` | `rust_binding_workflow` | 1 | 0.669 | 12660812 |
+| `userGWAS(Q_SNP=TRUE)` | `rust_binding_workflow` | 4 | 0.522 | 12660812 |
+| `commonfactorGWAS()` | `old_r_workflow` | 1 | 86.470 | 1009542 |
+| `commonfactorGWAS()` | `old_r_workflow` | 4 | 24.045 | 1009542 |
+| `commonfactorGWAS()` | `rust_binding_workflow` | 1 | 0.228 | 1009542 |
+| `commonfactorGWAS()` | `rust_binding_workflow` | 4 | 0.059 | 1009542 |
+
+- These remain local sanity figures; the release headline should still use the stronger remote
+  public-workflow measurements recorded earlier in this log.
