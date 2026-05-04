@@ -10,7 +10,9 @@ parse_args <- function(args) {
     k = 5L,
     cores = c(1L, 2L, 4L, 8L, 16L),
     repeats = 1L,
-    seed = 20260504L
+    seed = 20260504L,
+    fix_measurement = c(TRUE, FALSE),
+    q_snp = c(TRUE, FALSE)
   )
 
   for (arg in args) {
@@ -32,6 +34,10 @@ parse_args <- function(args) {
       values$repeats <- as.integer(value)
     } else if (key == "seed") {
       values$seed <- as.integer(value)
+    } else if (key == "fix_measurement") {
+      values$fix_measurement <- strsplit(value, ",", fixed = TRUE)[[1]] %in% c("TRUE", "true", "1", "yes")
+    } else if (key == "q_snp") {
+      values$q_snp <- strsplit(value, ",", fixed = TRUE)[[1]] %in% c("TRUE", "true", "1", "yes")
     } else {
       stop(sprintf("Unknown argument: %s", key), call. = FALSE)
     }
@@ -104,6 +110,15 @@ numeric_max_abs_diff <- function(left, right, columns) {
   ))
 }
 
+usergwas_numeric_columns <- function(q_snp) {
+  columns <- c("est", "SE", "chisq")
+  if (q_snp) {
+    columns <- c(columns, "Q_SNP", "Q_SNP_df", "Q_SNP_pval")
+  }
+
+  columns
+}
+
 run_commonfactor <- function(inputs, backend, parallel, cores) {
   fun <- if (backend == "lavaan") commonfactorGWAS else commonfactorGWAS_rust
 
@@ -117,7 +132,7 @@ run_commonfactor <- function(inputs, backend, parallel, cores) {
   ))
 }
 
-run_usergwas <- function(inputs, backend, parallel, cores) {
+run_usergwas <- function(inputs, backend, parallel, cores, fix_measurement, q_snp) {
   fun <- if (backend == "lavaan") userGWAS else userGWAS_rust
 
   suppressWarnings(fun(
@@ -128,19 +143,19 @@ run_usergwas <- function(inputs, backend, parallel, cores) {
     parallel = parallel,
     cores = if (parallel) cores else NULL,
     GC = "standard",
-    fix_measurement = TRUE,
-    Q_SNP = TRUE,
+    fix_measurement = fix_measurement,
+    Q_SNP = q_snp,
     printwarn = TRUE
   ))
 }
 
-benchmark_once <- function(workflow, backend, parallel, cores, inputs) {
+benchmark_once <- function(workflow, backend, parallel, cores, inputs, fix_measurement = NA, q_snp = NA) {
   gc()
   elapsed <- system.time({
     result <- if (workflow == "commonfactorGWAS") {
       run_commonfactor(inputs, backend, parallel, cores)
     } else {
-      run_usergwas(inputs, backend, parallel, cores)
+      run_usergwas(inputs, backend, parallel, cores, fix_measurement, q_snp)
     }
   })[["elapsed"]]
 
@@ -149,49 +164,91 @@ benchmark_once <- function(workflow, backend, parallel, cores, inputs) {
     backend = backend,
     mode = if (parallel) "parallel" else "sequential",
     cores = if (parallel) cores else 1L,
+    fix_measurement = fix_measurement,
+    Q_SNP = q_snp,
     elapsed_sec = elapsed,
     stringsAsFactors = FALSE
   )
 }
 
-check_parallel_equivalence <- function(inputs) {
+check_equivalence <- function(inputs, user_matrix) {
   commonfactor_seq <- run_commonfactor(inputs, "lavaanrust", FALSE, 1L)
   commonfactor_par <- run_commonfactor(inputs, "lavaanrust", TRUE, 2L)
-  usergwas_seq <- bind_usergwas(run_usergwas(inputs, "lavaanrust", FALSE, 1L))
-  usergwas_par <- bind_usergwas(run_usergwas(inputs, "lavaanrust", TRUE, 2L))
 
-  data.frame(
-    workflow = c("commonfactorGWAS", "userGWAS"),
-    max_abs_diff = c(
-      numeric_max_abs_diff(
-        commonfactor_seq,
-        commonfactor_par,
-        c("est", "se_c", "Q", "Z_Estimate", "Pval_Estimate")
-      ),
-      numeric_max_abs_diff(
-        usergwas_seq,
-        usergwas_par,
-        c("est", "SE", "chisq", "Q_SNP", "Q_SNP_df", "Q_SNP_pval")
-      )
+  commonfactor_row <- data.frame(
+    workflow = "commonfactorGWAS",
+    fix_measurement = NA,
+    Q_SNP = NA,
+    comparison = "rust_sequential_vs_parallel",
+    max_abs_diff = numeric_max_abs_diff(
+      commonfactor_seq,
+      commonfactor_par,
+      c("est", "se_c", "Q", "Z_Estimate", "Pval_Estimate")
     ),
     stringsAsFactors = FALSE
   )
+
+  user_rows <- do.call(rbind, lapply(seq_len(nrow(user_matrix)), function(row_idx) {
+    fix_measurement <- user_matrix$fix_measurement[[row_idx]]
+    q_snp <- user_matrix$Q_SNP[[row_idx]]
+    columns <- usergwas_numeric_columns(q_snp)
+
+    old_seq <- bind_usergwas(run_usergwas(inputs, "lavaan", FALSE, 1L, fix_measurement, q_snp))
+    rust_seq <- bind_usergwas(run_usergwas(inputs, "lavaanrust", FALSE, 1L, fix_measurement, q_snp))
+    rust_par <- bind_usergwas(run_usergwas(inputs, "lavaanrust", TRUE, 2L, fix_measurement, q_snp))
+
+    data.frame(
+      workflow = "userGWAS",
+      fix_measurement = fix_measurement,
+      Q_SNP = q_snp,
+      comparison = c("lavaan_vs_rust_sequential", "rust_sequential_vs_parallel"),
+      max_abs_diff = c(
+        numeric_max_abs_diff(old_seq, rust_seq, columns),
+        numeric_max_abs_diff(rust_seq, rust_par, columns)
+      ),
+      stringsAsFactors = FALSE
+    )
+  }))
+
+  rbind(commonfactor_row, user_rows)
 }
 
 args <- parse_args(commandArgs(trailingOnly = TRUE))
 inputs <- make_inputs(args$n_snp, args$k, args$seed)
+user_matrix <- expand.grid(
+  fix_measurement = args$fix_measurement,
+  Q_SNP = args$q_snp,
+  KEEP.OUT.ATTRS = FALSE,
+  stringsAsFactors = FALSE
+)
 
 cat("equivalence_check\n")
-print(check_parallel_equivalence(inputs), row.names = FALSE)
+print(check_equivalence(inputs, user_matrix), row.names = FALSE)
 
 timings <- do.call(rbind, lapply(seq_len(args$repeats), function(repeat_id) {
-  do.call(rbind, lapply(c("commonfactorGWAS", "userGWAS"), function(workflow) {
+  commonfactor_rows <- do.call(rbind, lapply(c("lavaan", "lavaanrust"), function(backend) {
+    rows <- list(
+      benchmark_once("commonfactorGWAS", backend, FALSE, 1L, inputs)
+    )
+    rows <- c(rows, lapply(args$cores, function(core_count) {
+      benchmark_once("commonfactorGWAS", backend, TRUE, core_count, inputs)
+    }))
+
+    out <- do.call(rbind, rows)
+    out$repeat_id <- repeat_id
+    out
+  }))
+
+  user_rows <- do.call(rbind, lapply(seq_len(nrow(user_matrix)), function(row_idx) {
+    fix_measurement <- user_matrix$fix_measurement[[row_idx]]
+    q_snp <- user_matrix$Q_SNP[[row_idx]]
+
     do.call(rbind, lapply(c("lavaan", "lavaanrust"), function(backend) {
       rows <- list(
-        benchmark_once(workflow, backend, FALSE, 1L, inputs)
+        benchmark_once("userGWAS", backend, FALSE, 1L, inputs, fix_measurement, q_snp)
       )
       rows <- c(rows, lapply(args$cores, function(core_count) {
-        benchmark_once(workflow, backend, TRUE, core_count, inputs)
+        benchmark_once("userGWAS", backend, TRUE, core_count, inputs, fix_measurement, q_snp)
       }))
 
       out <- do.call(rbind, rows)
@@ -199,6 +256,8 @@ timings <- do.call(rbind, lapply(seq_len(args$repeats), function(repeat_id) {
       out
     }))
   }))
+
+  rbind(commonfactor_rows, user_rows)
 }))
 
 timings$n_snp <- args$n_snp
