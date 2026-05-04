@@ -68,28 +68,22 @@ commonfactorGWAS_rust <- function(...) {
 userGWAS_rust <- function(...) {
   dots <- list(...)
   parallel <- if ("parallel" %in% names(dots)) dots$parallel else formals(userGWAS)$parallel
-  fix_measurement <- if ("fix_measurement" %in% names(dots)) dots$fix_measurement else formals(userGWAS)$fix_measurement
-  q_snp <- if ("Q_SNP" %in% names(dots)) dots$Q_SNP else formals(userGWAS)$Q_SNP
   estimation <- if ("estimation" %in% names(dots)) dots$estimation else formals(userGWAS)$estimation
   twas <- if ("TWAS" %in% names(dots)) dots$TWAS else formals(userGWAS)$TWAS
 
+  # Supported native slice:
+  # - simple one-factor SNP models such as `F1 =~ A + B + C` plus `F1 ~ SNP`
+  # - `parallel = FALSE`
+  # - `estimation = "DWLS"`
+  # - `TWAS = FALSE`
+  # - both `fix_measurement = TRUE/FALSE`
+  # - both `Q_SNP = TRUE/FALSE`
+  #
+  # The wrapper stays strict on purpose: unsupported combinations error instead
+  # of silently mixing lavaan and rust execution.
   if (isTRUE(parallel)) {
     stop(
       "userGWAS_rust() currently supports parallel = FALSE only; the rust wrapper does not fall back to the original parallel worker path.",
-      call. = FALSE
-    )
-  }
-
-  if (!isTRUE(fix_measurement)) {
-    stop(
-      "userGWAS_rust() currently supports fix_measurement = TRUE only; unsupported paths do not fall back to lavaan.",
-      call. = FALSE
-    )
-  }
-
-  if (isTRUE(q_snp)) {
-    stop(
-      "userGWAS_rust() currently supports Q_SNP = FALSE only; unsupported paths do not fall back to lavaan.",
       call. = FALSE
     )
   }

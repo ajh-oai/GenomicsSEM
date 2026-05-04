@@ -32,6 +32,30 @@ test_that("userGWAS fixed-measurement refit matches frozen lavaan estimates", {
   )
 })
 
+test_that("userGWAS unrestricted base-model reuse stays native", {
+  fixture <- user_gwas_fixture()
+  fit <- lavaanrust::sem_rust(
+    fixture$model,
+    sample.cov = fixture$sample_cov,
+    estimator = "DWLS",
+    WLS.V = fixture$wls_v
+  )
+  refit <- lavaanrust::lavaan_rust(
+    sample.cov = fixture$sample_cov,
+    WLS.V = fixture$wls_v,
+    slotOptions = fit@Options,
+    slotParTable = fit@ParTable,
+    slotData = fit@Data,
+    slotModel = fit@Model
+  )
+
+  expect_equal(
+    lavaanrust::parTable_rust(refit)$est,
+    lavaanrust::parTable_rust(fit)$est,
+    tolerance = 2e-6
+  )
+})
+
 test_that("userGWAS fixed-measurement base-model reuse stays native", {
   fixture <- user_gwas_fixture()
   fit <- lavaanrust::sem_rust(

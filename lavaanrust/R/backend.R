@@ -1399,6 +1399,16 @@ lavaan_rust <- function(sample.cov, WLS.V = NULL, slotOptions = NULL, slotParTab
 
   if (
     is.list(slotModel) &&
+      identical(slotModel$model_kind, "user_gwas_dwls") &&
+      is.character(slotModel$model) &&
+      is.matrix(sample.cov) &&
+      is.matrix(WLS.V)
+  ) {
+    return(.fit_user_gwas_model(slotModel$model, sample.cov, WLS.V))
+  }
+
+  if (
+    is.list(slotModel) &&
       identical(slotModel$model_kind, "user_gwas_fixed_measurement_dwls") &&
       is.data.frame(slotModel$par_table) &&
       is.matrix(sample.cov) &&
