@@ -15,6 +15,9 @@ methods::setClass(
     converged = "logical",
     observed_names = "character",
     latent_name = "character",
-    model_kind = "character"
+    model_kind = "character",
+    Options = "list",
+    Data = "list",
+    Model = "list"
   )
 )

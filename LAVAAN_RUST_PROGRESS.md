@@ -15,7 +15,7 @@
   - `parTable_rust()`
   - `fitted_rust()`
   - `resid_rust()`
-  - defined-parameter helper stubs that currently delegate to lavaan
+  - defined-parameter helper stubs that currently strict-error
 - Added `commonfactor_rust()` without copying the original function body:
   it clones the existing `commonfactor()` closure and rebinds only the lavaan
   symbols in a child environment.
@@ -25,7 +25,7 @@
   of silently delegating to upstream lavaan.
 - Added frozen one-factor fixtures from lavaan 0.6-21 and test coverage for:
   - the rust-backed one-factor DWLS slice
-  - fallback to upstream lavaan for unsupported syntax
+  - strict errors for unsupported syntax
 
 ### Current support boundary
 
@@ -70,3 +70,68 @@ lavaan work from `commonfactor_rust()` itself.
 2. Broaden `sem_rust()` from current covariance-only families toward the
    `commonfactorGWAS()` model slice.
 3. Add `commonfactorGWAS_rust()` once the model-reuse path is native.
+
+## 2026-05-04 12:59 PDT
+
+### Implemented
+
+- Added a strict native `commonfactorGWAS()` backend family:
+  - marker-scaled factor/SNP DWLS first-stage fit
+  - slot-style base-model reuse through `lavaan_rust()`
+  - Q-model refit with direct SNP effects and trait residual variances free
+- Extended `lavaan_rust_fit` with the compatibility slots needed by the current
+  GenomicSEM reuse path: `Options`, `Data`, and `Model`.
+- Added `commonfactorGWAS_rust()` using the original GenomicSEM implementation
+  with rust-bound helper closures for `.commonfactorGWAS_main()` and
+  `.rearrange()`.
+- Kept the wrapper boundary strict: `commonfactorGWAS_rust()` currently requires
+  `parallel = FALSE`; unsupported parallel execution errors instead of drifting
+  into the original worker path.
+- Added a narrow `class()` compatibility shim inside the rust-bound wrapper
+  environment so the unchanged upstream `class(fit)[1] == "lavaan"` checks see
+  rust fit objects as successful lavaan-compatible fits.
+
+### Current support boundary
+
+`sem_rust()` now owns:
+
+- one-factor covariance-only DWLS models used by `commonfactor()`
+- the observed-covariance DWLS family used by the common-factor CFI/null model
+  and its parameter-table refit
+- the marker-scaled one-factor SNP model used by `commonfactorGWAS()`
+- the `commonfactorGWAS()` Q-model parameter-table refit
+
+`lavaan_rust()` now owns the strict slot-reuse path for the supported
+`commonfactorGWAS()` DWLS base model. Unsupported reuse patterns still error and
+do not delegate to lavaan.
+
+`commonfactorGWAS_rust()` currently supports the sequential path only. The
+existing `foreach` worker setup needs an explicit rust-bound export strategy
+before the parallel path can be considered supported.
+
+### Validation
+
+- `lavaanrust/tests/testthat`: 20 passing tests.
+- Frozen lavaan 0.6-21 `commonfactorGWAS()` fixture:
+  - first-stage parameter estimates match within `2e-06`
+  - Q-model refit parameter estimates match within `2e-06`
+- Synthetic sequential GenomicSEM smoke:
+  - `commonfactorGWAS()` vs `commonfactorGWAS_rust()` factor-SNP estimate max
+    absolute difference: `1.57e-08`
+  - Q-statistic absolute difference: `4.82e-08`
+
+### Local benchmarks
+
+Synthetic 3-trait fixture, macOS laptop, 2026-05-04:
+
+| Benchmark | lavaan | rust-backed | Speedup |
+| --- | ---: | ---: | ---: |
+| direct `commonfactorGWAS()` first-stage `sem()` fit | `0.018000 s` | `0.001000 s` | `18.00x` |
+| end-to-end sequential `commonfactorGWAS()` smoke, 1 SNP | `0.067000 s` | `0.005000 s` | `13.40x` |
+
+### Next packet
+
+1. Decide whether to push the experiment deeper into `commonfactorGWAS()`
+   parallel worker support or move next to `usermodel_rust()`.
+2. Broaden parser and constraint support only where another GenomicSEM wrapper
+   actually needs it.

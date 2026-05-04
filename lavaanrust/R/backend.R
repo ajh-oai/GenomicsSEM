@@ -134,7 +134,10 @@
     converged = isTRUE(fit$converged),
     observed_names = observed_names,
     latent_name = latent_name,
-    model_kind = "one_factor_dwls"
+    model_kind = "one_factor_dwls",
+    Options = list(estimator = "DWLS"),
+    Data = list(observed_names = observed_names),
+    Model = list(model_kind = "one_factor_dwls", model = model)
   )
 }
 
@@ -345,7 +348,10 @@
     converged = isTRUE(fit$converged),
     observed_names = spec$observed_names,
     latent_name = character(),
-    model_kind = model_kind
+    model_kind = model_kind,
+    Options = list(estimator = "DWLS"),
+    Data = list(observed_names = spec$observed_names),
+    Model = list(model_kind = model_kind, par_table = par_table)
   )
 }
 
@@ -360,6 +366,362 @@
   )
 
   .new_observed_covariance_fit(par_table, spec$sample_cov, WLS.V, fit, model_kind)
+}
+
+.parse_commonfactor_gwas_model <- function(model) {
+  if (!is.character(model) || length(model) != 1L) {
+    return(NULL)
+  }
+
+  lines <- trimws(strsplit(model, "\n", fixed = TRUE)[[1L]])
+  lines <- lines[nzchar(lines)]
+  loading_line <- lines[grepl("=~", lines, fixed = TRUE)]
+  regression_line <- lines[grepl("~", lines, fixed = TRUE) & !grepl("=~", lines, fixed = TRUE)]
+
+  if (length(loading_line) != 1L || length(regression_line) < 2L) {
+    return(NULL)
+  }
+
+  loading_parts <- trimws(strsplit(loading_line, "=~", fixed = TRUE)[[1L]])
+  if (length(loading_parts) != 2L) {
+    return(NULL)
+  }
+
+  latent_name <- loading_parts[[1L]]
+  traits <- trimws(strsplit(loading_parts[[2L]], "+", fixed = TRUE)[[1L]])
+  traits <- traits[nzchar(traits)]
+  factor_regression <- regression_line[
+    grepl(paste0("^", latent_name, "[[:space:]]*~"), regression_line)
+  ]
+
+  if (length(factor_regression) != 1L || !length(traits)) {
+    return(NULL)
+  }
+
+  predictor <- trimws(strsplit(factor_regression, "~", fixed = TRUE)[[1L]][[2L]])
+  expected_direct <- paste0(traits, " ~ 0*", predictor)
+  direct_regression <- regression_line[regression_line != factor_regression]
+
+  if (!identical(sort(gsub("[[:space:]]+", "", direct_regression)), sort(gsub("[[:space:]]+", "", expected_direct)))) {
+    return(NULL)
+  }
+
+  list(
+    latent_name = latent_name,
+    predictor = predictor,
+    traits = traits
+  )
+}
+
+.commonfactor_gwas_par_table <- function(spec, fit) {
+  k <- length(spec$traits)
+  n_rows <- 3L * k + 3L
+  free <- c(
+    0L,
+    if (k > 1L) seq_len(k - 1L) else integer(),
+    k,
+    rep(0L, k),
+    k + seq_len(k),
+    2L * k + 1L,
+    2L * k + 2L
+  )
+  est <- c(
+    fit$loadings,
+    fit$gamma,
+    rep(0, k),
+    fit$residuals,
+    fit$psi,
+    fit$phi
+  )
+  se <- c(
+    0,
+    if (k > 1L) fit$naive_se[seq_len(k - 1L)] else numeric(),
+    fit$naive_se[[k]],
+    rep(0, k),
+    fit$naive_se[k + seq_len(k)],
+    fit$naive_se[[2L * k + 1L]],
+    fit$naive_se[[2L * k + 2L]]
+  )
+
+  data.frame(
+    id = seq_len(n_rows),
+    lhs = c(
+      rep(spec$latent_name, k),
+      spec$latent_name,
+      spec$traits,
+      spec$traits,
+      spec$latent_name,
+      spec$predictor
+    ),
+    op = c(
+      rep("=~", k),
+      "~",
+      rep("~", k),
+      rep("~~", k),
+      "~~",
+      "~~"
+    ),
+    rhs = c(
+      spec$traits,
+      spec$predictor,
+      rep(spec$predictor, k),
+      spec$traits,
+      spec$latent_name,
+      spec$predictor
+    ),
+    user = c(rep(1L, 2L * k + 1L), rep(0L, k + 2L)),
+    block = rep(1L, n_rows),
+    group = rep(1L, n_rows),
+    free = as.integer(free),
+    ustart = c(1, rep(NA_real_, k - 1L), NA_real_, rep(0, k), rep(NA_real_, k + 2L)),
+    exo = rep(0L, n_rows),
+    label = rep("", n_rows),
+    plabel = paste0(".p", seq_len(n_rows), "."),
+    start = est,
+    est = est,
+    se = se,
+    stringsAsFactors = FALSE
+  )
+}
+
+.new_commonfactor_gwas_fit <- function(model, sample.cov, WLS.V, fit) {
+  spec <- .parse_commonfactor_gwas_model(model)
+  observed_names <- c(spec$predictor, spec$traits)
+  dimnames(sample.cov) <- list(observed_names, observed_names)
+  delta <- matrix(fit$delta, nrow = length(.stat_names(observed_names)))
+  dimnames(delta) <- list(
+    .stat_names(observed_names),
+    c(
+      paste0(spec$latent_name, "=~", spec$traits[-1L]),
+      paste0(spec$latent_name, "~", spec$predictor),
+      paste0(spec$traits, "~~", spec$traits),
+      paste0(spec$latent_name, "~~", spec$latent_name),
+      paste0(spec$predictor, "~~", spec$predictor)
+    )
+  )
+  implied <- matrix(fit$implied, nrow = nrow(sample.cov), ncol = ncol(sample.cov))
+  dimnames(implied) <- dimnames(sample.cov)
+  par_table <- .commonfactor_gwas_par_table(spec, fit)
+  npar <- 2L * length(spec$traits) + 2L
+  fit_stats <- c(
+    npar = npar,
+    fmin = fit$objective,
+    chisq = 2 * fit$objective,
+    df = length(.stat_names(observed_names)) - npar,
+    srmr = fit$srmr
+  )
+
+  methods::new(
+    "lavaan_rust_fit",
+    ParTable = par_table,
+    observed = sample.cov,
+    implied = list(cov = implied),
+    delta = delta,
+    WLS.V = WLS.V,
+    fit = fit_stats,
+    cor.lv = matrix(1, nrow = 1L, ncol = 1L, dimnames = list(spec$latent_name, spec$latent_name)),
+    se = list(theta = matrix(0, nrow = nrow(sample.cov), ncol = ncol(sample.cov))),
+    converged = isTRUE(fit$converged),
+    observed_names = observed_names,
+    latent_name = spec$latent_name,
+    model_kind = "commonfactor_gwas_dwls",
+    Options = list(estimator = "DWLS"),
+    Data = list(observed_names = observed_names),
+    Model = list(model_kind = "commonfactor_gwas_dwls", model = model)
+  )
+}
+
+.fit_commonfactor_gwas_model <- function(model, sample.cov, WLS.V) {
+  spec <- .parse_commonfactor_gwas_model(model)
+  observed_names <- c(spec$predictor, spec$traits)
+
+  if (!identical(colnames(sample.cov), observed_names) && !identical(rownames(sample.cov), observed_names)) {
+    stop("commonfactor GWAS rust slice requires sample.cov ordered as predictor followed by indicators.", call. = FALSE)
+  }
+
+  fit <- fit_commonfactor_gwas_dwls(
+    as.double(sample.cov),
+    as.double(WLS.V),
+    as.integer(length(spec$traits)),
+    400L,
+    1e-12
+  )
+
+  .new_commonfactor_gwas_fit(model, sample.cov, WLS.V, fit)
+}
+
+.par_value_rust <- function(par_table, row_idx) {
+  if (!length(row_idx)) {
+    return(0)
+  }
+
+  row_idx <- row_idx[[1L]]
+  if (!is.na(par_table$ustart[[row_idx]])) {
+    return(par_table$ustart[[row_idx]])
+  }
+
+  if (!is.na(par_table$est[[row_idx]])) {
+    return(par_table$est[[row_idx]])
+  }
+
+  0
+}
+
+.commonfactor_gwas_q_spec <- function(par_table) {
+  loading_rows <- which(par_table$op == "=~")
+  latent_names <- unique(par_table$lhs[loading_rows])
+  if (length(latent_names) != 1L) {
+    return(NULL)
+  }
+
+  latent_name <- latent_names[[1L]]
+  traits <- par_table$rhs[loading_rows]
+  factor_regression <- which(
+    par_table$op == "~" &
+      par_table$lhs == latent_name
+  )
+
+  if (length(factor_regression) != 1L) {
+    return(NULL)
+  }
+
+  predictor <- par_table$rhs[[factor_regression]]
+  direct_rows <- vapply(
+    traits,
+    function(trait) {
+      rows <- which(
+        par_table$op == "~" &
+          par_table$lhs == trait &
+          par_table$rhs == predictor
+      )
+      if (length(rows) != 1L) {
+        return(NA_integer_)
+      }
+
+      rows[[1L]]
+    },
+    integer(1L)
+  )
+  residual_rows <- vapply(
+    traits,
+    function(trait) {
+      rows <- which(
+        par_table$op == "~~" &
+          par_table$lhs == trait &
+          par_table$rhs == trait
+      )
+      if (length(rows) != 1L) {
+        return(NA_integer_)
+      }
+
+      rows[[1L]]
+    },
+    integer(1L)
+  )
+  psi_row <- which(
+    par_table$op == "~~" &
+      par_table$lhs == latent_name &
+      par_table$rhs == latent_name
+  )
+  phi_row <- which(
+    par_table$op == "~~" &
+      par_table$lhs == predictor &
+      par_table$rhs == predictor
+  )
+
+  if (
+    anyNA(direct_rows) ||
+      anyNA(residual_rows) ||
+      length(psi_row) != 1L ||
+      length(phi_row) != 1L ||
+      !identical(as.integer(par_table$free[direct_rows]), seq_along(traits)) ||
+      !identical(as.integer(par_table$free[residual_rows]), length(traits) + seq_along(traits))
+  ) {
+    return(NULL)
+  }
+
+  list(
+    latent_name = latent_name,
+    predictor = predictor,
+    traits = traits,
+    loading_rows = loading_rows,
+    factor_regression = factor_regression,
+    direct_rows = direct_rows,
+    residual_rows = residual_rows,
+    psi_row = psi_row[[1L]],
+    phi_row = phi_row[[1L]]
+  )
+}
+
+.new_commonfactor_gwas_q_fit <- function(par_table, sample.cov, WLS.V, spec, fit) {
+  observed_names <- c(spec$predictor, spec$traits)
+  dimnames(sample.cov) <- list(observed_names, observed_names)
+  implied <- matrix(fit$implied, nrow = nrow(sample.cov), ncol = ncol(sample.cov))
+  dimnames(implied) <- dimnames(sample.cov)
+  delta <- matrix(fit$delta, nrow = length(.stat_names(observed_names)))
+  dimnames(delta) <- list(
+    .stat_names(observed_names),
+    c(
+      paste0(spec$traits, "~", spec$predictor),
+      paste0(spec$traits, "~~", spec$traits)
+    )
+  )
+  par_table <- as.data.frame(par_table, stringsAsFactors = FALSE)
+  par_table$est[spec$direct_rows] <- fit$direct
+  par_table$est[spec$residual_rows] <- fit$residuals
+  par_table$se[] <- 0
+  par_table$se[c(spec$direct_rows, spec$residual_rows)] <- fit$naive_se
+  npar <- 2L * length(spec$traits)
+  fit_stats <- c(
+    npar = npar,
+    fmin = fit$objective,
+    chisq = 2 * fit$objective,
+    df = length(.stat_names(observed_names)) - npar,
+    srmr = fit$srmr
+  )
+
+  methods::new(
+    "lavaan_rust_fit",
+    ParTable = par_table,
+    observed = sample.cov,
+    implied = list(cov = implied),
+    delta = delta,
+    WLS.V = WLS.V,
+    fit = fit_stats,
+    cor.lv = matrix(1, nrow = 1L, ncol = 1L, dimnames = list(spec$latent_name, spec$latent_name)),
+    se = list(theta = matrix(0, nrow = nrow(sample.cov), ncol = ncol(sample.cov))),
+    converged = isTRUE(fit$converged),
+    observed_names = observed_names,
+    latent_name = spec$latent_name,
+    model_kind = "commonfactor_gwas_q_dwls",
+    Options = list(estimator = "DWLS"),
+    Data = list(observed_names = observed_names),
+    Model = list(model_kind = "commonfactor_gwas_q_dwls", par_table = par_table)
+  )
+}
+
+.fit_commonfactor_gwas_q_model <- function(par_table, sample.cov, WLS.V, spec) {
+  loadings <- vapply(par_table$est[spec$loading_rows], as.numeric, numeric(1L))
+  gamma <- .par_value_rust(par_table, spec$factor_regression)
+  direct <- vapply(spec$direct_rows, function(row_idx) .par_value_rust(par_table, row_idx), numeric(1L))
+  residuals <- vapply(spec$residual_rows, function(row_idx) .par_value_rust(par_table, row_idx), numeric(1L))
+  psi <- .par_value_rust(par_table, spec$psi_row)
+  phi <- .par_value_rust(par_table, spec$phi_row)
+  fit <- fit_commonfactor_gwas_q_dwls(
+    as.double(sample.cov),
+    as.double(WLS.V),
+    as.double(loadings),
+    as.double(gamma),
+    as.double(direct),
+    as.double(residuals),
+    as.double(psi),
+    as.double(phi),
+    as.integer(length(spec$traits)),
+    400L,
+    1e-12
+  )
+
+  .new_commonfactor_gwas_q_fit(par_table, sample.cov, WLS.V, spec, fit)
 }
 
 #' Rust-backed experimental replacement for the supported `lavaan::sem()` slice.
@@ -390,6 +752,15 @@ sem_rust <- function(model, sample.cov, estimator = "ML", WLS.V = NULL, ...) {
 
   if (
     identical(estimator, "DWLS") &&
+      !is.null(.parse_commonfactor_gwas_model(model)) &&
+      is.matrix(sample.cov) &&
+      is.matrix(WLS.V)
+  ) {
+    return(.fit_commonfactor_gwas_model(model, sample.cov, WLS.V))
+  }
+
+  if (
+    identical(estimator, "DWLS") &&
       .is_commonfactor_null_model(model) &&
       is.matrix(sample.cov) &&
       is.matrix(WLS.V)
@@ -416,6 +787,11 @@ sem_rust <- function(model, sample.cov, estimator = "ML", WLS.V = NULL, ...) {
       is.matrix(sample.cov) &&
       is.matrix(WLS.V)
   ) {
+    q_spec <- .commonfactor_gwas_q_spec(model)
+    if (!is.null(q_spec)) {
+      return(.fit_commonfactor_gwas_q_model(model, sample.cov, WLS.V, q_spec))
+    }
+
     return(.fit_observed_covariance_model(
       model,
       sample.cov,
@@ -432,11 +808,27 @@ sem_rust <- function(model, sample.cov, estimator = "ML", WLS.V = NULL, ...) {
 
 #' Rust-backed experimental replacement for `lavaan::lavaan()`.
 #'
-#' @param ... Reserved for future lavaan-compatible model-reuse arguments.
+#' @param sample.cov Observed covariance matrix.
+#' @param WLS.V DWLS weight matrix.
+#' @param slotOptions Compatibility payload from a prior rust fit.
+#' @param slotParTable Compatibility parameter table from a prior rust fit.
+#' @param slotData Compatibility payload from a prior rust fit.
+#' @param slotModel Compatibility model payload from a prior rust fit.
+#' @param ... Additional lavaan-style arguments. Unsupported paths still error.
 #' @export
-lavaan_rust <- function(...) {
+lavaan_rust <- function(sample.cov, WLS.V = NULL, slotOptions = NULL, slotParTable = NULL, slotData = NULL, slotModel = NULL, ...) {
+  if (
+    is.list(slotModel) &&
+      identical(slotModel$model_kind, "commonfactor_gwas_dwls") &&
+      is.character(slotModel$model) &&
+      is.matrix(sample.cov) &&
+      is.matrix(WLS.V)
+  ) {
+    return(.fit_commonfactor_gwas_model(slotModel$model, sample.cov, WLS.V))
+  }
+
   stop(
-    "lavaan_rust() model-reuse refits are not implemented yet.",
+    "Unsupported lavaan_rust() model-reuse path. The rust wrapper does not fall back to lavaan.",
     call. = FALSE
   )
 }

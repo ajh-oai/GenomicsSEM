@@ -30,4 +30,32 @@ fit_one_factor_dwls <- function(sample_cov, wls_v, n, max_iter, tol) .Call(wrap_
 #' @export
 fit_observed_covariance_dwls <- function(sample_cov, wls_v, free_mask, fixed_values, n) .Call(wrap__fit_observed_covariance_dwls, sample_cov, wls_v, free_mask, fixed_values, n)
 
+#' Fit the marker-scaled common-factor GWAS DWLS slice used by
+#' GenomicSEM's `commonfactorGWAS()` model.
+#'
+#' Variable order is expected to be `SNP, trait_1, ..., trait_k`.
+#' @param sample_cov Flattened observed covariance matrix.
+#' @param wls_v Flattened DWLS weight matrix.
+#' @param k Number of trait indicators.
+#' @param max_iter Maximum optimizer iterations.
+#' @param tol Convergence tolerance.
+#' @export
+fit_commonfactor_gwas_dwls <- function(sample_cov, wls_v, k, max_iter, tol) .Call(wrap__fit_commonfactor_gwas_dwls, sample_cov, wls_v, k, max_iter, tol)
+
+#' Fit the common-factor GWAS Q-model refit where direct SNP effects and trait
+#' residual variances are free and all first-stage quantities are fixed.
+#' @param sample_cov Flattened observed covariance matrix.
+#' @param wls_v Flattened DWLS weight matrix.
+#' @param loadings Fixed marker-scaled trait loadings.
+#' @param gamma Fixed factor regression coefficient.
+#' @param direct Initial direct SNP effects.
+#' @param residuals Initial trait residual variances.
+#' @param psi Fixed factor residual variance.
+#' @param phi Fixed SNP variance.
+#' @param k Number of trait indicators.
+#' @param max_iter Maximum optimizer iterations.
+#' @param tol Convergence tolerance.
+#' @export
+fit_commonfactor_gwas_q_dwls <- function(sample_cov, wls_v, loadings, gamma, direct, residuals, psi, phi, k, max_iter, tol) .Call(wrap__fit_commonfactor_gwas_q_dwls, sample_cov, wls_v, loadings, gamma, direct, residuals, psi, phi, k, max_iter, tol)
+
 # nolint end

@@ -4,10 +4,30 @@
 \alias{lavaan_rust}
 \title{Rust-backed experimental replacement for \code{lavaan::lavaan()}.}
 \usage{
-lavaan_rust(...)
+lavaan_rust(
+  sample.cov,
+  WLS.V = NULL,
+  slotOptions = NULL,
+  slotParTable = NULL,
+  slotData = NULL,
+  slotModel = NULL,
+  ...
+)
 }
 \arguments{
-\item{...}{Reserved for future lavaan-compatible model-reuse arguments.}
+\item{sample.cov}{Observed covariance matrix.}
+
+\item{WLS.V}{DWLS weight matrix.}
+
+\item{slotOptions}{Compatibility payload from a prior rust fit.}
+
+\item{slotParTable}{Compatibility parameter table from a prior rust fit.}
+
+\item{slotData}{Compatibility payload from a prior rust fit.}
+
+\item{slotModel}{Compatibility model payload from a prior rust fit.}
+
+\item{...}{Additional lavaan-style arguments. Unsupported paths still error.}
 }
 \description{
 Rust-backed experimental replacement for \code{lavaan::lavaan()}.

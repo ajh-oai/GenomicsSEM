@@ -1,3 +1,5 @@
+export(fit_commonfactor_gwas_dwls)
+export(fit_commonfactor_gwas_q_dwls)
 export(fit_observed_covariance_dwls)
 export(fit_one_factor_dwls)
 export(fitted_rust)

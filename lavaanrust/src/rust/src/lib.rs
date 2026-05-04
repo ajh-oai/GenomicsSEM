@@ -32,6 +32,173 @@ fn implied_one_factor(loadings: &DVector<f64>, residuals: &DVector<f64>) -> DMat
     implied
 }
 
+fn implied_commonfactor_gwas(
+    loadings: &DVector<f64>,
+    gamma: f64,
+    residuals: &DVector<f64>,
+    psi: f64,
+    phi: f64,
+) -> DMatrix<f64> {
+    let k = loadings.len();
+    let mut implied = DMatrix::<f64>::zeros(k + 1, k + 1);
+    let factor_total = gamma * gamma * phi + psi;
+
+    implied[(0, 0)] = phi;
+
+    for idx in 0..k {
+        let cov = phi * loadings[idx] * gamma;
+        implied[(idx + 1, 0)] = cov;
+        implied[(0, idx + 1)] = cov;
+    }
+
+    for col in 0..k {
+        for row in col..k {
+            let mut cov = loadings[row] * loadings[col] * factor_total;
+            if row == col {
+                cov += residuals[row];
+            }
+
+            implied[(row + 1, col + 1)] = cov;
+            implied[(col + 1, row + 1)] = cov;
+        }
+    }
+
+    implied
+}
+
+fn delta_commonfactor_gwas(
+    loadings: &DVector<f64>,
+    gamma: f64,
+    psi: f64,
+    phi: f64,
+) -> DMatrix<f64> {
+    let k = loadings.len();
+    let n_stats = (k + 1) * (k + 2) / 2;
+    let n_params = 2 * k + 2;
+    let mut delta = DMatrix::<f64>::zeros(n_stats, n_params);
+    let factor_total = gamma * gamma * phi + psi;
+    let gamma_col = k - 1;
+    let theta_start = gamma_col + 1;
+    let psi_col = theta_start + k;
+    let phi_col = psi_col + 1;
+    let mut stat_row = 0;
+
+    for col in 0..=k {
+        for row in col..=k {
+            if col == 0 && row == 0 {
+                delta[(stat_row, phi_col)] = 1.0;
+            } else if col == 0 || row == 0 {
+                let trait_idx = row.max(col) - 1;
+
+                if trait_idx > 0 {
+                    delta[(stat_row, trait_idx - 1)] = phi * gamma;
+                }
+
+                delta[(stat_row, gamma_col)] = phi * loadings[trait_idx];
+                delta[(stat_row, phi_col)] = loadings[trait_idx] * gamma;
+            } else {
+                let trait_row = row - 1;
+                let trait_col = col - 1;
+
+                if trait_row > 0 {
+                    delta[(stat_row, trait_row - 1)] += loadings[trait_col] * factor_total;
+                }
+
+                if trait_col > 0 {
+                    delta[(stat_row, trait_col - 1)] += loadings[trait_row] * factor_total;
+                }
+
+                delta[(stat_row, gamma_col)] =
+                    loadings[trait_row] * loadings[trait_col] * 2.0 * gamma * phi;
+                delta[(stat_row, psi_col)] = loadings[trait_row] * loadings[trait_col];
+                delta[(stat_row, phi_col)] =
+                    loadings[trait_row] * loadings[trait_col] * gamma * gamma;
+
+                if trait_row == trait_col {
+                    delta[(stat_row, theta_start + trait_row)] = 1.0;
+                }
+            }
+
+            stat_row += 1;
+        }
+    }
+
+    delta
+}
+
+fn implied_commonfactor_gwas_q(
+    loadings: &DVector<f64>,
+    gamma: f64,
+    direct: &DVector<f64>,
+    residuals: &DVector<f64>,
+    psi: f64,
+    phi: f64,
+) -> DMatrix<f64> {
+    let k = loadings.len();
+    let mut implied = DMatrix::<f64>::zeros(k + 1, k + 1);
+    let beta = loadings * gamma + direct;
+
+    implied[(0, 0)] = phi;
+
+    for idx in 0..k {
+        let cov = phi * beta[idx];
+        implied[(idx + 1, 0)] = cov;
+        implied[(0, idx + 1)] = cov;
+    }
+
+    for col in 0..k {
+        for row in col..k {
+            let mut cov = loadings[row] * loadings[col] * psi + phi * beta[row] * beta[col];
+            if row == col {
+                cov += residuals[row];
+            }
+
+            implied[(row + 1, col + 1)] = cov;
+            implied[(col + 1, row + 1)] = cov;
+        }
+    }
+
+    implied
+}
+
+fn delta_commonfactor_gwas_q(
+    loadings: &DVector<f64>,
+    gamma: f64,
+    direct: &DVector<f64>,
+    phi: f64,
+) -> DMatrix<f64> {
+    let k = loadings.len();
+    let n_stats = (k + 1) * (k + 2) / 2;
+    let mut delta = DMatrix::<f64>::zeros(n_stats, 2 * k);
+    let beta = loadings * gamma + direct;
+    let mut stat_row = 0;
+
+    for col in 0..=k {
+        for row in col..=k {
+            if col == 0 && row == 0 {
+                // The predictor variance is fixed in the Q-model refit.
+            } else if col == 0 || row == 0 {
+                let trait_idx = row.max(col) - 1;
+                delta[(stat_row, trait_idx)] = phi;
+            } else {
+                let trait_row = row - 1;
+                let trait_col = col - 1;
+
+                delta[(stat_row, trait_row)] += phi * beta[trait_col];
+                delta[(stat_row, trait_col)] += phi * beta[trait_row];
+
+                if trait_row == trait_col {
+                    delta[(stat_row, k + trait_row)] = 1.0;
+                }
+            }
+
+            stat_row += 1;
+        }
+    }
+
+    delta
+}
+
 fn delta_one_factor(loadings: &DVector<f64>) -> DMatrix<f64> {
     let n = loadings.len();
     let n_stats = n * (n + 1) / 2;
@@ -78,6 +245,27 @@ fn initial_one_factor(sample_cov: &DMatrix<f64>) -> (DVector<f64>, DVector<f64>)
     }
 
     (loadings, residuals)
+}
+
+fn initial_commonfactor_gwas(
+    sample_cov: &DMatrix<f64>,
+) -> (DVector<f64>, f64, DVector<f64>, f64, f64) {
+    let k = sample_cov.nrows() - 1;
+    let trait_cov = sample_cov.view((1, 1), (k, k)).into_owned();
+    let (std_loadings, residuals) = initial_one_factor(&trait_cov);
+    let marker = if std_loadings[0].abs() < 1e-8 {
+        1.0
+    } else {
+        std_loadings[0]
+    };
+    let mut loadings = std_loadings / marker;
+    loadings[0] = 1.0;
+    let phi = sample_cov[(0, 0)].max(1e-8);
+    let gamma = sample_cov[(1, 0)] / phi;
+    let factor_total = marker * marker;
+    let psi = (factor_total - gamma * gamma * phi).max(1e-8);
+
+    (loadings, gamma, residuals, psi, phi)
 }
 
 fn srmr(sample_cov: &DMatrix<f64>, implied: &DMatrix<f64>) -> f64 {
@@ -262,7 +450,10 @@ fn fit_observed_covariance_dwls(
     let n_stats = n * (n + 1) / 2;
     let sample_cov_values = sample_cov.iter().map(|value| value.0).collect::<Vec<_>>();
     let wls_values = wls_v.iter().map(|value| value.0).collect::<Vec<_>>();
-    let free_mask_values = free_mask.iter().map(|value| value.0 != 0).collect::<Vec<_>>();
+    let free_mask_values = free_mask
+        .iter()
+        .map(|value| value.0 != 0)
+        .collect::<Vec<_>>();
     let fixed_values = fixed_values.iter().map(|value| value.0).collect::<Vec<_>>();
 
     if sample_cov_values.len() != n * n {
@@ -321,8 +512,278 @@ fn fit_observed_covariance_dwls(
     ))
 }
 
+/// Fit the marker-scaled common-factor GWAS DWLS slice used by
+/// GenomicSEM's `commonfactorGWAS()` model.
+///
+/// Variable order is expected to be `SNP, trait_1, ..., trait_k`.
+/// @param sample_cov Flattened observed covariance matrix.
+/// @param wls_v Flattened DWLS weight matrix.
+/// @param k Number of trait indicators.
+/// @param max_iter Maximum optimizer iterations.
+/// @param tol Convergence tolerance.
+/// @export
+#[extendr]
+fn fit_commonfactor_gwas_dwls(
+    sample_cov: Doubles,
+    wls_v: Doubles,
+    k: i32,
+    max_iter: i32,
+    tol: f64,
+) -> std::result::Result<List, Error> {
+    if k <= 0 {
+        return Err(Error::Other("k must be positive".into()));
+    }
+
+    let k = k as usize;
+    let n = k + 1;
+    let n_stats = n * (n + 1) / 2;
+    let sample_cov_values = sample_cov.iter().map(|value| value.0).collect::<Vec<_>>();
+    let wls_values = wls_v.iter().map(|value| value.0).collect::<Vec<_>>();
+
+    if sample_cov_values.len() != n * n {
+        return Err(Error::Other("sample_cov has the wrong size".into()));
+    }
+
+    if wls_values.len() != n_stats * n_stats {
+        return Err(Error::Other("wls_v has the wrong size".into()));
+    }
+
+    let sample_cov = from_col_major(&sample_cov_values, n, n);
+    let wls_v = from_col_major(&wls_values, n_stats, n_stats);
+    let observed = vech(&sample_cov);
+    let (mut loadings, mut gamma, mut residuals, mut psi, mut phi) =
+        initial_commonfactor_gwas(&sample_cov);
+    let mut damping = 1e-6;
+    let mut converged = false;
+    let mut iterations = 0;
+
+    for iter in 0..max_iter.max(1) {
+        iterations = iter + 1;
+
+        let implied = implied_commonfactor_gwas(&loadings, gamma, &residuals, psi, phi);
+        let residual = &observed - vech(&implied);
+        let delta = delta_commonfactor_gwas(&loadings, gamma, psi, phi);
+        let gradient = delta.transpose() * &wls_v * &residual;
+        let hessian = delta.transpose() * &wls_v * &delta;
+        let mut regularized = hessian.clone();
+
+        for idx in 0..regularized.nrows() {
+            regularized[(idx, idx)] += damping;
+        }
+
+        let Some(step) = regularized.lu().solve(&gradient) else {
+            damping *= 10.0;
+            continue;
+        };
+
+        let old_objective = 0.5 * residual.dot(&(&wls_v * &residual));
+        let mut next_loadings = loadings.clone();
+        let mut next_residuals = residuals.clone();
+
+        for idx in 1..k {
+            next_loadings[idx] += step[idx - 1];
+        }
+
+        let gamma_idx = k - 1;
+        let theta_start = gamma_idx + 1;
+        let next_gamma = gamma + step[gamma_idx];
+
+        for idx in 0..k {
+            next_residuals[idx] = (next_residuals[idx] + step[theta_start + idx]).max(1e-10);
+        }
+
+        let next_psi = (psi + step[theta_start + k]).max(1e-10);
+        let next_phi = (phi + step[theta_start + k + 1]).max(1e-10);
+        let next_implied = implied_commonfactor_gwas(
+            &next_loadings,
+            next_gamma,
+            &next_residuals,
+            next_psi,
+            next_phi,
+        );
+        let next_residual = &observed - vech(&next_implied);
+        let next_objective = 0.5 * next_residual.dot(&(&wls_v * &next_residual));
+
+        if next_objective <= old_objective {
+            loadings = next_loadings;
+            gamma = next_gamma;
+            residuals = next_residuals;
+            psi = next_psi;
+            phi = next_phi;
+            damping = (damping / 3.0).max(1e-12);
+
+            if step.amax() < tol {
+                converged = true;
+                break;
+            }
+        } else {
+            damping *= 10.0;
+        }
+    }
+
+    let implied = implied_commonfactor_gwas(&loadings, gamma, &residuals, psi, phi);
+    let residual = &observed - vech(&implied);
+    let delta = delta_commonfactor_gwas(&loadings, gamma, psi, phi);
+    let bread = (delta.transpose() * &wls_v * &delta)
+        .try_inverse()
+        .unwrap_or_else(|| DMatrix::<f64>::zeros(2 * k + 2, 2 * k + 2));
+    let naive_se = bread.diagonal().map(|value| value.max(0.0).sqrt());
+    let objective = 0.5 * residual.dot(&(&wls_v * &residual));
+
+    Ok(list!(
+        loadings = loadings.as_slice().to_vec(),
+        gamma = gamma,
+        residuals = residuals.as_slice().to_vec(),
+        psi = psi,
+        phi = phi,
+        implied = to_col_major(&implied),
+        delta = to_col_major(&delta),
+        naive_se = naive_se.as_slice().to_vec(),
+        objective = objective,
+        srmr = srmr(&sample_cov, &implied),
+        converged = converged,
+        iterations = iterations
+    ))
+}
+
+/// Fit the common-factor GWAS Q-model refit where direct SNP effects and trait
+/// residual variances are free and all first-stage quantities are fixed.
+/// @param sample_cov Flattened observed covariance matrix.
+/// @param wls_v Flattened DWLS weight matrix.
+/// @param loadings Fixed marker-scaled trait loadings.
+/// @param gamma Fixed factor regression coefficient.
+/// @param direct Initial direct SNP effects.
+/// @param residuals Initial trait residual variances.
+/// @param psi Fixed factor residual variance.
+/// @param phi Fixed SNP variance.
+/// @param k Number of trait indicators.
+/// @param max_iter Maximum optimizer iterations.
+/// @param tol Convergence tolerance.
+/// @export
+#[extendr]
+fn fit_commonfactor_gwas_q_dwls(
+    sample_cov: Doubles,
+    wls_v: Doubles,
+    loadings: Doubles,
+    gamma: f64,
+    direct: Doubles,
+    residuals: Doubles,
+    psi: f64,
+    phi: f64,
+    k: i32,
+    max_iter: i32,
+    tol: f64,
+) -> std::result::Result<List, Error> {
+    if k <= 0 {
+        return Err(Error::Other("k must be positive".into()));
+    }
+
+    let k = k as usize;
+    let n = k + 1;
+    let n_stats = n * (n + 1) / 2;
+    let sample_cov_values = sample_cov.iter().map(|value| value.0).collect::<Vec<_>>();
+    let wls_values = wls_v.iter().map(|value| value.0).collect::<Vec<_>>();
+    let loadings = loadings.iter().map(|value| value.0).collect::<Vec<_>>();
+    let direct = direct.iter().map(|value| value.0).collect::<Vec<_>>();
+    let residuals = residuals.iter().map(|value| value.0).collect::<Vec<_>>();
+
+    if sample_cov_values.len() != n * n {
+        return Err(Error::Other("sample_cov has the wrong size".into()));
+    }
+
+    if wls_values.len() != n_stats * n_stats {
+        return Err(Error::Other("wls_v has the wrong size".into()));
+    }
+
+    if loadings.len() != k || direct.len() != k || residuals.len() != k {
+        return Err(Error::Other(
+            "loadings, direct, and residuals must each have length k".into(),
+        ));
+    }
+
+    let sample_cov = from_col_major(&sample_cov_values, n, n);
+    let wls_v = from_col_major(&wls_values, n_stats, n_stats);
+    let observed = vech(&sample_cov);
+    let loadings = DVector::from_vec(loadings);
+    let mut direct = DVector::from_vec(direct);
+    let mut residuals = DVector::from_vec(residuals);
+    let mut damping = 1e-6;
+    let mut converged = false;
+    let mut iterations = 0;
+
+    for iter in 0..max_iter.max(1) {
+        iterations = iter + 1;
+
+        let implied = implied_commonfactor_gwas_q(&loadings, gamma, &direct, &residuals, psi, phi);
+        let residual = &observed - vech(&implied);
+        let delta = delta_commonfactor_gwas_q(&loadings, gamma, &direct, phi);
+        let gradient = delta.transpose() * &wls_v * &residual;
+        let hessian = delta.transpose() * &wls_v * &delta;
+        let mut regularized = hessian.clone();
+
+        for idx in 0..regularized.nrows() {
+            regularized[(idx, idx)] += damping;
+        }
+
+        let Some(step) = regularized.lu().solve(&gradient) else {
+            damping *= 10.0;
+            continue;
+        };
+
+        let old_objective = 0.5 * residual.dot(&(&wls_v * &residual));
+        let mut next_direct = direct.clone();
+        let mut next_residuals = residuals.clone();
+
+        for idx in 0..k {
+            next_direct[idx] += step[idx];
+            next_residuals[idx] = (next_residuals[idx] + step[k + idx]).max(1e-10);
+        }
+
+        let next_implied =
+            implied_commonfactor_gwas_q(&loadings, gamma, &next_direct, &next_residuals, psi, phi);
+        let next_residual = &observed - vech(&next_implied);
+        let next_objective = 0.5 * next_residual.dot(&(&wls_v * &next_residual));
+
+        if next_objective <= old_objective {
+            direct = next_direct;
+            residuals = next_residuals;
+            damping = (damping / 3.0).max(1e-12);
+
+            if step.amax() < tol {
+                converged = true;
+                break;
+            }
+        } else {
+            damping *= 10.0;
+        }
+    }
+
+    let implied = implied_commonfactor_gwas_q(&loadings, gamma, &direct, &residuals, psi, phi);
+    let residual = &observed - vech(&implied);
+    let delta = delta_commonfactor_gwas_q(&loadings, gamma, &direct, phi);
+    let bread = (delta.transpose() * &wls_v * &delta)
+        .try_inverse()
+        .unwrap_or_else(|| DMatrix::<f64>::zeros(2 * k, 2 * k));
+    let naive_se = bread.diagonal().map(|value| value.max(0.0).sqrt());
+    let objective = 0.5 * residual.dot(&(&wls_v * &residual));
+
+    Ok(list!(
+        direct = direct.as_slice().to_vec(),
+        residuals = residuals.as_slice().to_vec(),
+        implied = to_col_major(&implied),
+        delta = to_col_major(&delta),
+        naive_se = naive_se.as_slice().to_vec(),
+        objective = objective,
+        srmr = srmr(&sample_cov, &implied),
+        converged = converged,
+        iterations = iterations
+    ))
+}
+
 extendr_module! {
     mod lavaanrust;
     fn fit_one_factor_dwls;
     fn fit_observed_covariance_dwls;
+    fn fit_commonfactor_gwas_dwls;
+    fn fit_commonfactor_gwas_q_dwls;
 }
