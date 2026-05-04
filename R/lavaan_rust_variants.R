@@ -17,6 +17,8 @@
   rust_env$standardizedSolution <- lavaanrust::standardizedSolution_rust
   rust_env$lav_model_get_parameters <- lavaanrust::lav_model_get_parameters_rust
   rust_env$lav_func_jacobian_complex <- lavaanrust::lav_func_jacobian_complex_rust
+  rust_env$.parallel_worker_packages <- "lavaanrust"
+  rust_env$.parallel_worker_packages_windows <- c("lavaanrust", "gdata")
   rust_env$class <- function(x) {
     if (methods::is(x, "lavaan_rust_fit")) {
       return("lavaan")
@@ -47,16 +49,10 @@ usermodel_rust <- function(...) {
   rust_fun(...)
 }
 commonfactorGWAS_rust <- function(...) {
-  dots <- list(...)
-  parallel <- if ("parallel" %in% names(dots)) dots$parallel else formals(commonfactorGWAS)$parallel
-
-  if (isTRUE(parallel)) {
-    stop(
-      "commonfactorGWAS_rust() currently supports parallel = FALSE only; the rust wrapper does not fall back to the original parallel worker path.",
-      call. = FALSE
-    )
-  }
-
+  # Supported native slice:
+  # - the current one-factor commonfactorGWAS model family
+  # - either `parallel = TRUE/FALSE`
+  # - the DWLS SNP path backed by the strict rust sem/lavaan surface
   rust_fun <- .with_lavaan_rust_backend(
     commonfactorGWAS,
     helper_names = c(".commonfactorGWAS_main", ".rearrange")
@@ -73,7 +69,7 @@ userGWAS_rust <- function(...) {
 
   # Supported native slice:
   # - simple one-factor SNP models such as `F1 =~ A + B + C` plus `F1 ~ SNP`
-  # - `parallel = FALSE`
+  # - either `parallel = TRUE/FALSE`
   # - `estimation = "DWLS"`
   # - `TWAS = FALSE`
   # - both `fix_measurement = TRUE/FALSE`
@@ -81,13 +77,6 @@ userGWAS_rust <- function(...) {
   #
   # The wrapper stays strict on purpose: unsupported combinations error instead
   # of silently mixing lavaan and rust execution.
-  if (isTRUE(parallel)) {
-    stop(
-      "userGWAS_rust() currently supports parallel = FALSE only; the rust wrapper does not fall back to the original parallel worker path.",
-      call. = FALSE
-    )
-  }
-
   if (!identical(estimation, "DWLS")) {
     stop(
       "userGWAS_rust() currently supports estimation = \"DWLS\" only; unsupported paths do not fall back to lavaan.",
