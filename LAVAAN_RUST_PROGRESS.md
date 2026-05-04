@@ -375,12 +375,14 @@ with:
 - `parallel = TRUE/FALSE`
 - `estimation = "DWLS"`
 - `TWAS = FALSE`
+- `std.lv = FALSE`
 - either `fix_measurement = TRUE/FALSE`
 - either `Q_SNP = TRUE/FALSE`
 
 Still unsupported:
 
 - `TWAS = TRUE`
+- `std.lv = TRUE`
 - ML estimation
 - multi-factor or more general user-model syntax
 
@@ -495,3 +497,16 @@ Selected comparisons:
 2. If more parallel work is desired later, target batching/task granularity for
    the already-fast rust loops rather than expecting uniform gains from simply
    raising `cores`.
+
+## 2026-05-04 16:13 PDT
+
+### Tightening
+
+- Added an explicit `std.lv = TRUE` rejection in `userGWAS_rust()`.
+- This was already outside the intended native slice, but it was not previously
+  guarded:
+  - `fix_measurement = TRUE, std.lv = TRUE` failed mid-run
+  - `fix_measurement = FALSE, std.lv = TRUE` completed but was not equivalent to
+    lavaan
+- The wrapper now keeps the experiment's strict contract: unsupported paths
+  fail immediately instead of producing mixed or incorrect results.

@@ -66,12 +66,14 @@ userGWAS_rust <- function(...) {
   parallel <- if ("parallel" %in% names(dots)) dots$parallel else formals(userGWAS)$parallel
   estimation <- if ("estimation" %in% names(dots)) dots$estimation else formals(userGWAS)$estimation
   twas <- if ("TWAS" %in% names(dots)) dots$TWAS else formals(userGWAS)$TWAS
+  std_lv <- if ("std.lv" %in% names(dots)) dots$std.lv else formals(userGWAS)$std.lv
 
   # Supported native slice:
   # - simple one-factor SNP models such as `F1 =~ A + B + C` plus `F1 ~ SNP`
   # - either `parallel = TRUE/FALSE`
   # - `estimation = "DWLS"`
   # - `TWAS = FALSE`
+  # - `std.lv = FALSE`
   # - both `fix_measurement = TRUE/FALSE`
   # - both `Q_SNP = TRUE/FALSE`
   #
@@ -87,6 +89,13 @@ userGWAS_rust <- function(...) {
   if (isTRUE(twas)) {
     stop(
       "userGWAS_rust() currently supports TWAS = FALSE only; unsupported paths do not fall back to lavaan.",
+      call. = FALSE
+    )
+  }
+
+  if (isTRUE(std_lv)) {
+    stop(
+      "userGWAS_rust() currently supports std.lv = FALSE only; unsupported paths do not fall back to lavaan.",
       call. = FALSE
     )
   }
