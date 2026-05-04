@@ -425,3 +425,73 @@ Selected comparisons:
 2. If parallel performance remains a priority later, revisit task granularity
    and batching for the very fast rust-backed loops rather than only adding
    more workers.
+
+## 2026-05-04 16:05 PDT
+
+### Implemented
+
+- Expanded `tools/bench_lavaan_rust_parallel.R` from the default
+  fixed-measurement / `Q_SNP = TRUE` benchmark into the full current supported
+  `userGWAS_rust()` matrix:
+  - `fix_measurement = TRUE/FALSE`
+  - `Q_SNP = TRUE/FALSE`
+- Added full-matrix equivalence checks before timing:
+  - lavaan vs rust-backed sequential output for every supported user-GWAS cell
+  - rust-backed sequential vs 2-worker parallel output for every supported
+    user-GWAS cell
+
+### Validation
+
+Remote panda/flex 16-CPU pod, synthetic `n_snp = 1000`, `k = 5` fixture:
+
+| Workflow | `fix_measurement` | `Q_SNP` | Comparison | Max absolute difference |
+| --- | --- | --- | --- | ---: |
+| `commonfactorGWAS()` | `NA` | `NA` | rust sequential vs parallel | `0` |
+| `userGWAS()` | `TRUE` | `TRUE` | lavaan vs rust sequential | `1.18e-07` |
+| `userGWAS()` | `TRUE` | `TRUE` | rust sequential vs parallel | `0` |
+| `userGWAS()` | `FALSE` | `TRUE` | lavaan vs rust sequential | `1.38e-07` |
+| `userGWAS()` | `FALSE` | `TRUE` | rust sequential vs parallel | `0` |
+| `userGWAS()` | `TRUE` | `FALSE` | lavaan vs rust sequential | `1.18e-07` |
+| `userGWAS()` | `TRUE` | `FALSE` | rust sequential vs parallel | `0` |
+| `userGWAS()` | `FALSE` | `FALSE` | lavaan vs rust sequential | `1.38e-07` |
+| `userGWAS()` | `FALSE` | `FALSE` | rust sequential vs parallel | `0` |
+
+### Remote benchmarks
+
+Synthetic 1,000-SNP, 5-trait fixture on the same panda/flex 16-CPU pod,
+`OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, `MKL_NUM_THREADS=1`,
+2026-05-04:
+
+| Workflow | Backend | `fix_measurement` | `Q_SNP` | sequential | 2 cores | 4 cores | 8 cores | 16 cores |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `commonfactorGWAS()` | lavaan | `NA` | `NA` | `167.093 s` | `85.649 s` | `44.774 s` | `24.852 s` | `18.423 s` |
+| `commonfactorGWAS_rust()` | rust-backed | `NA` | `NA` | `6.250 s` | `4.941 s` | `2.227 s` | `1.504 s` | `1.463 s` |
+| `userGWAS()` | lavaan | `TRUE` | `TRUE` | `62.121 s` | `62.418 s` | `28.771 s` | `17.526 s` | `14.421 s` |
+| `userGWAS_rust()` | rust-backed | `TRUE` | `TRUE` | `5.411 s` | `5.484 s` | `2.819 s` | `2.176 s` | `2.283 s` |
+| `userGWAS()` | lavaan | `FALSE` | `TRUE` | `87.534 s` | `77.286 s` | `35.251 s` | `20.281 s` | `14.901 s` |
+| `userGWAS_rust()` | rust-backed | `FALSE` | `TRUE` | `6.589 s` | `6.389 s` | `2.928 s` | `2.438 s` | `2.283 s` |
+| `userGWAS()` | lavaan | `TRUE` | `FALSE` | `61.323 s` | `58.999 s` | `28.431 s` | `18.290 s` | `13.912 s` |
+| `userGWAS_rust()` | rust-backed | `TRUE` | `FALSE` | `4.472 s` | `4.008 s` | `2.455 s` | `2.122 s` | `1.937 s` |
+| `userGWAS()` | lavaan | `FALSE` | `FALSE` | `87.180 s` | `81.775 s` | `35.065 s` | `20.161 s` | `16.304 s` |
+| `userGWAS_rust()` | rust-backed | `FALSE` | `FALSE` | `5.341 s` | `4.045 s` | `2.651 s` | `2.269 s` | `2.036 s` |
+
+Selected comparisons:
+
+- Sequential speedups span `11.48x` to `16.32x` across the full supported
+  `userGWAS_rust()` matrix.
+- At 16 workers, speedups span `6.32x` to `8.01x` across that matrix.
+- `Q_SNP = FALSE` lowers rust-backed runtime materially in both measurement
+  modes, especially for `fix_measurement = TRUE`.
+- The best rust-backed worker count is not constant:
+  - `fix_measurement = TRUE`, `Q_SNP = TRUE`: best at 8 workers
+  - `fix_measurement = FALSE`, `Q_SNP = TRUE`: best at 16 workers
+  - `fix_measurement = TRUE`, `Q_SNP = FALSE`: best at 16 workers
+  - `fix_measurement = FALSE`, `Q_SNP = FALSE`: best at 16 workers
+
+### Next packet
+
+1. Broaden `usermodel_rust()` syntax or move to a second real user-GWAS model
+   family.
+2. If more parallel work is desired later, target batching/task granularity for
+   the already-fast rust loops rather than expecting uniform gains from simply
+   raising `cores`.
