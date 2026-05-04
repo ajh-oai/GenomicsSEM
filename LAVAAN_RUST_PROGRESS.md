@@ -338,3 +338,90 @@ Synthetic 3-trait fixture, macOS laptop, 2026-05-04:
    `userGWAS_rust()` slice.
 2. Then decide whether to broaden `usermodel_rust()` syntax or move to a
    second real user-GWAS model family.
+
+## 2026-05-04 15:18 PDT
+
+### Implemented
+
+- Added explicit parallel worker plumbing for backend-swapped GWAS wrappers:
+  - `commonfactorGWAS()` and `userGWAS()` now bind the worker helper before
+    entering `foreach`
+  - worker package exports are selected from wrapper-local settings, so
+    `_rust()` variants load `lavaanrust` workers without changing the original
+    serial logic
+- Enabled strict native parallel execution for:
+  - `commonfactorGWAS_rust()`
+  - `userGWAS_rust()`
+- Added `tools/bench_lavaan_rust_parallel.R`, a reproducible benchmark harness
+  that:
+  - generates deterministic synthetic LDSC/GWAS inputs
+  - checks sequential-vs-parallel equality for the rust-backed wrappers
+  - benchmarks lavaan and rust-backed wrappers over multiple core counts
+
+### Current support boundary
+
+`commonfactorGWAS_rust()` now supports the current one-factor DWLS model family
+with either `parallel = TRUE/FALSE`.
+
+`userGWAS_rust()` now supports simple one-factor SNP models such as:
+
+```r
+F1 =~ A + B + C
+F1 ~ SNP
+```
+
+with:
+
+- `parallel = TRUE/FALSE`
+- `estimation = "DWLS"`
+- `TWAS = FALSE`
+- either `fix_measurement = TRUE/FALSE`
+- either `Q_SNP = TRUE/FALSE`
+
+Still unsupported:
+
+- `TWAS = TRUE`
+- ML estimation
+- multi-factor or more general user-model syntax
+
+### Validation
+
+- Local 4-SNP and benchmark-harness smoke checks matched exactly between
+  rust-backed sequential and parallel output on the checked numeric columns.
+- Remote panda/flex 16-CPU benchmark pod, synthetic `n_snp = 1000`, `k = 5`
+  fixture:
+  - `commonfactorGWAS_rust()` sequential vs 2-worker parallel max absolute
+    difference: `0`
+  - `userGWAS_rust()` sequential vs 2-worker parallel max absolute difference:
+    `0`
+
+### Remote benchmarks
+
+Synthetic 1,000-SNP, 5-trait fixture on a panda/flex 16-CPU pod,
+`OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1`, `MKL_NUM_THREADS=1`,
+2026-05-04:
+
+| Workflow | Backend | sequential | 2 cores | 4 cores | 8 cores | 16 cores |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `commonfactorGWAS()` | lavaan | `167.523 s` | `85.818 s` | `45.065 s` | `24.809 s` | `18.668 s` |
+| `commonfactorGWAS_rust()` | rust-backed | `6.227 s` | `4.432 s` | `2.091 s` | `1.509 s` | `1.365 s` |
+| `userGWAS()` | lavaan | `62.443 s` | `62.423 s` | `28.090 s` | `17.820 s` | `14.530 s` |
+| `userGWAS_rust()` | rust-backed | `5.439 s` | `4.581 s` | `2.704 s` | `2.138 s` | `2.361 s` |
+
+Selected comparisons:
+
+- `commonfactorGWAS_rust()` is `26.90x` faster than lavaan sequentially and
+  `13.68x` faster at 16 workers.
+- `userGWAS_rust()` is `11.48x` faster than lavaan sequentially and `6.15x`
+  faster at 16 workers.
+- The common-factor rust path continues to improve through 16 workers on this
+  fixture; the user-GWAS rust path is fastest at 8 workers here, so worker
+  overhead is already visible once the per-SNP fit cost is small enough.
+
+### Next packet
+
+1. Broaden `usermodel_rust()` syntax or move to a second real user-GWAS model
+   family.
+2. If parallel performance remains a priority later, revisit task granularity
+   and batching for the very fast rust-backed loops rather than only adding
+   more workers.
