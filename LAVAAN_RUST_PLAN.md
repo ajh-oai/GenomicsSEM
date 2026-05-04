@@ -84,10 +84,12 @@ of the backend contract.
 
 ## Proposed repository shape
 
-Start with a nested R package so the experiment is isolated and easy to remove:
+Start with a nested R package so the experiment is isolated and easy to remove.
+The conceptual backend is `lavaan_rust`, but the R package is named
+`lavaanrust` because R package names cannot contain underscores:
 
 ```text
-lavaan_rust/
+lavaanrust/
   DESCRIPTION
   NAMESPACE
   R/
