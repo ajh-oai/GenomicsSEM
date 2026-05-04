@@ -99,6 +99,7 @@ attribute to confirm which path a run used.
 ## Evidence and Details
 
 - Full benchmark history: [`benches/BENCHMARK_LOG.md`](benches/BENCHMARK_LOG.md)
+- Native model-fitting design: [`MODEL_FITTING.md`](MODEL_FITTING.md)
 - Reproduction harnesses and caveats: [`repro/README.md`](repro/README.md)
 - User-facing patch notes: [`PATCHNOTES.md`](PATCHNOTES.md)
 
