@@ -197,7 +197,7 @@ Synthetic 3-trait fixture, macOS laptop, 2026-05-04:
 2. Likely next targets are either constrained one-factor models or the
    user-defined-parameter machinery needed for `:=`.
 
-## 2026-05-04 13:57 PDT
+## 2026-05-04 13:30 PDT
 
 ### Implemented
 
@@ -266,3 +266,75 @@ Synthetic 3-trait fixture, macOS laptop, 2026-05-04:
 2. If the goal is still the pure isolated-backend experiment, the most
    informative next step is probably a second real user-model family rather
    than changing outer GenomicSEM orchestration.
+
+## 2026-05-04 13:41 PDT
+
+### Implemented
+
+- Expanded `userGWAS_rust()` from the first default packet to the full current
+  one-factor sequential DWLS slice:
+  - both `fix_measurement = TRUE/FALSE`
+  - both `Q_SNP = TRUE/FALSE`
+- Added native `lavaan_rust()` slot reuse for the unrestricted
+  `user_gwas_dwls` model family used when `fix_measurement = FALSE`.
+- Kept the supported matrix explicit in the `userGWAS_rust()` source comments
+  so the strict wrapper boundary is visible where the behavior is enforced.
+
+### Current support boundary
+
+`userGWAS_rust()` now supports simple one-factor SNP models such as:
+
+```r
+F1 =~ A + B + C
+F1 ~ SNP
+```
+
+with:
+
+- `parallel = FALSE`
+- `estimation = "DWLS"`
+- `TWAS = FALSE`
+- either `fix_measurement = TRUE/FALSE`
+- either `Q_SNP = TRUE/FALSE`
+
+Still unsupported:
+
+- `parallel = TRUE`
+- `TWAS = TRUE`
+- ML estimation
+- multi-factor or more general user-model syntax
+
+### Validation
+
+- `lavaanrust/tests/testthat`: 38 passing tests.
+- Added native reuse coverage for the unrestricted `user_gwas_dwls` base model.
+- Synthetic sequential GenomicSEM smokes, 1 SNP:
+  - `fix_measurement = FALSE`, `Q_SNP = FALSE`:
+    - max estimate difference: `1.04e-07`
+    - max sandwich SE difference: `4.89e-08`
+    - max chi-square difference: `1.16e-13`
+  - `fix_measurement = FALSE`, `Q_SNP = TRUE`:
+    - max `Q_SNP` difference: `3.44e-08`
+    - max `Q_SNP` p-value difference: `1.65e-08`
+  - `fix_measurement = TRUE`, `Q_SNP = TRUE`:
+    - max `Q_SNP` difference: `2.06e-09`
+    - max `Q_SNP` p-value difference: `9.86e-10`
+
+### Local benchmarks
+
+Synthetic 3-trait fixture, macOS laptop, 2026-05-04:
+
+| Benchmark | lavaan | rust-backed | Speedup |
+| --- | ---: | ---: | ---: |
+| direct unrestricted `userGWAS()` `sem()` fit | `0.021660 s` | `0.000732 s` | `29.59x` |
+| end-to-end sequential, `fix_measurement = FALSE`, `Q_SNP = FALSE` | `0.062500 s` | `0.011800 s` | `5.30x` |
+| end-to-end sequential, `fix_measurement = FALSE`, `Q_SNP = TRUE` | `0.057200 s` | `0.005300 s` | `10.79x` |
+| end-to-end sequential, `fix_measurement = TRUE`, `Q_SNP = FALSE` | `0.100500 s` | `0.006600 s` | `15.23x` |
+| end-to-end sequential, `fix_measurement = TRUE`, `Q_SNP = TRUE` | `0.103800 s` | `0.007100 s` | `14.62x` |
+
+### Next packet
+
+1. Add parallel worker support for the now-complete current one-factor
+   `userGWAS_rust()` slice.
+2. Then decide whether to broaden `usermodel_rust()` syntax or move to a
+   second real user-GWAS model family.
