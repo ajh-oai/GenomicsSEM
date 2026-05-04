@@ -196,3 +196,73 @@ Synthetic 3-trait fixture, macOS laptop, 2026-05-04:
    current one-factor case.
 2. Likely next targets are either constrained one-factor models or the
    user-defined-parameter machinery needed for `:=`.
+
+## 2026-05-04 13:57 PDT
+
+### Implemented
+
+- Added the first strict `userGWAS_rust()` slice while preserving the original
+  GenomicSEM `userGWAS()` body.
+- Reused the existing marker-scaled one-factor SNP optimizer for the
+  unrestricted first-stage `F1 =~ ...` plus `F1 ~ SNP` fit.
+- Added a new native fixed-measurement DWLS solver for the default
+  `fix_measurement = TRUE` path:
+  - fixed loadings from the no-SNP measurement model
+  - free trait residual variances
+  - free latent residual variance
+  - free factor-SNP regression
+  - free SNP variance
+- Added strict native slot reuse for the fixed-measurement base model through
+  `lavaan_rust()`, which is the path exercised inside the per-SNP loop.
+- Kept the wrapper boundary explicit. `userGWAS_rust()` currently requires:
+  - `parallel = FALSE`
+  - `fix_measurement = TRUE`
+  - `Q_SNP = FALSE`
+  - `estimation = "DWLS"`
+  - `TWAS = FALSE`
+
+### Current support boundary
+
+The new `userGWAS_rust()` slice supports simple one-factor models such as:
+
+```r
+F1 =~ A + B + C
+F1 ~ SNP
+```
+
+Unsupported user-GWAS paths still error and do not fall back to lavaan. The
+current packet intentionally does not yet cover unconstrained measurement
+refits, `Q_SNP`, TWAS, parallel workers, multiple latent factors, or more
+general user-model syntax.
+
+### Validation
+
+- `lavaanrust/tests/testthat`: 37 passing tests.
+- Frozen lavaan 0.6-21 fixtures for:
+  - the unrestricted one-factor user-GWAS first stage
+  - the fixed-measurement parameter-table refit
+  - fixed-measurement slot reuse
+- Synthetic sequential GenomicSEM smoke, 1 SNP:
+  - max estimate difference: `5.20e-09`
+  - max sandwich SE difference: `3.34e-10`
+  - max chi-square difference: `2.06e-09`
+- `R CMD build lavaanrust` followed by
+  `R CMD check lavaanrust_0.0.0.9000.tar.gz --no-manual`: clean after adding
+  the generated Rd page for the new exported solver.
+
+### Local benchmarks
+
+Synthetic 3-trait fixture, macOS laptop, 2026-05-04:
+
+| Benchmark | lavaan | rust-backed | Speedup |
+| --- | ---: | ---: | ---: |
+| direct fixed-measurement `sem()` refit | `0.015040 s` | `0.000244 s` | `61.64x` |
+| end-to-end sequential `userGWAS()` smoke, 1 SNP | `0.105400 s` | `0.013300 s` | `7.92x` |
+
+### Next packet
+
+1. Decide whether to broaden `userGWAS_rust()` next into `Q_SNP = TRUE`, the
+   unconstrained `fix_measurement = FALSE` path, or parallel worker support.
+2. If the goal is still the pure isolated-backend experiment, the most
+   informative next step is probably a second real user-model family rather
+   than changing outer GenomicSEM orchestration.
