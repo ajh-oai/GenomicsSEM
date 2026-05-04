@@ -9,7 +9,25 @@ NULL
 #' `commonfactor()` model.
 #'
 #' `sample_cov` and `wls_v` are flattened column-major R matrices.
+#' @param sample_cov Flattened observed covariance matrix.
+#' @param wls_v Flattened DWLS weight matrix.
+#' @param n Number of observed variables.
+#' @param max_iter Maximum optimizer iterations.
+#' @param tol Convergence tolerance.
 #' @export
 fit_one_factor_dwls <- function(sample_cov, wls_v, n, max_iter, tol) .Call(wrap__fit_one_factor_dwls, sample_cov, wls_v, n, max_iter, tol)
+
+#' Fit a covariance-only observed-variable DWLS model where the free parameters
+#' are selected entries of `vech(Sigma)`.
+#'
+#' This covers the common-factor null model and the parameter-table refit used
+#' to estimate its residual-covariance Q statistic.
+#' @param sample_cov Flattened observed covariance matrix.
+#' @param wls_v Flattened DWLS weight matrix.
+#' @param free_mask Integer mask over `vech(Sigma)`.
+#' @param fixed_values Fixed values over `vech(Sigma)`.
+#' @param n Number of observed variables.
+#' @export
+fit_observed_covariance_dwls <- function(sample_cov, wls_v, free_mask, fixed_values, n) .Call(wrap__fit_observed_covariance_dwls, sample_cov, wls_v, free_mask, fixed_values, n)
 
 # nolint end

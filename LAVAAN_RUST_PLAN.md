@@ -11,6 +11,9 @@ The initial rule is deliberately strict:
 - New wrappers such as `commonfactor_rust()` and `usermodel_rust()` should be
   line-for-line equivalents of the existing functions except that they call
   `lavaan_rust` entrypoints such as `sem_rust()` and `lavInspect_rust()`.
+- `_rust()` wrappers are strict: if execution reaches a lavaan feature that the
+  Rust backend does not yet implement, they should error instead of silently
+  delegating back to lavaan.
 - `lavaan_rust` should implement only the subset of lavaan that GenomicSEM
   actually uses, with an R-facing API that mirrors lavaan closely enough for
   those wrappers to stay mechanically comparable.

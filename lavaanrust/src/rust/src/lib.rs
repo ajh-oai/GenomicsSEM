@@ -105,10 +105,30 @@ fn srmr(sample_cov: &DMatrix<f64>, implied: &DMatrix<f64>) -> f64 {
     }
 }
 
+fn from_vech(values: &DVector<f64>, n: usize) -> DMatrix<f64> {
+    let mut matrix = DMatrix::<f64>::zeros(n, n);
+    let mut idx = 0;
+
+    for col in 0..n {
+        for row in col..n {
+            matrix[(row, col)] = values[idx];
+            matrix[(col, row)] = values[idx];
+            idx += 1;
+        }
+    }
+
+    matrix
+}
+
 /// Fit the covariance-only one-factor DWLS slice used by GenomicSEM's
 /// `commonfactor()` model.
 ///
 /// `sample_cov` and `wls_v` are flattened column-major R matrices.
+/// @param sample_cov Flattened observed covariance matrix.
+/// @param wls_v Flattened DWLS weight matrix.
+/// @param n Number of observed variables.
+/// @param max_iter Maximum optimizer iterations.
+/// @param tol Convergence tolerance.
 /// @export
 #[extendr]
 fn fit_one_factor_dwls(
@@ -215,7 +235,94 @@ fn fit_one_factor_dwls(
     ))
 }
 
+/// Fit a covariance-only observed-variable DWLS model where the free parameters
+/// are selected entries of `vech(Sigma)`.
+///
+/// This covers the common-factor null model and the parameter-table refit used
+/// to estimate its residual-covariance Q statistic.
+/// @param sample_cov Flattened observed covariance matrix.
+/// @param wls_v Flattened DWLS weight matrix.
+/// @param free_mask Integer mask over `vech(Sigma)`.
+/// @param fixed_values Fixed values over `vech(Sigma)`.
+/// @param n Number of observed variables.
+/// @export
+#[extendr]
+fn fit_observed_covariance_dwls(
+    sample_cov: Doubles,
+    wls_v: Doubles,
+    free_mask: Integers,
+    fixed_values: Doubles,
+    n: i32,
+) -> std::result::Result<List, Error> {
+    if n <= 0 {
+        return Err(Error::Other("n must be positive".into()));
+    }
+
+    let n = n as usize;
+    let n_stats = n * (n + 1) / 2;
+    let sample_cov_values = sample_cov.iter().map(|value| value.0).collect::<Vec<_>>();
+    let wls_values = wls_v.iter().map(|value| value.0).collect::<Vec<_>>();
+    let free_mask_values = free_mask.iter().map(|value| value.0 != 0).collect::<Vec<_>>();
+    let fixed_values = fixed_values.iter().map(|value| value.0).collect::<Vec<_>>();
+
+    if sample_cov_values.len() != n * n {
+        return Err(Error::Other("sample_cov has the wrong size".into()));
+    }
+
+    if wls_values.len() != n_stats * n_stats {
+        return Err(Error::Other("wls_v has the wrong size".into()));
+    }
+
+    if free_mask_values.len() != n_stats || fixed_values.len() != n_stats {
+        return Err(Error::Other(
+            "free_mask and fixed_values must match vech(sample_cov)".into(),
+        ));
+    }
+
+    let sample_cov = from_col_major(&sample_cov_values, n, n);
+    let wls_v = from_col_major(&wls_values, n_stats, n_stats);
+    let observed = vech(&sample_cov);
+    let fixed = DVector::from_vec(fixed_values);
+    let free_indices = free_mask_values
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, is_free)| is_free.then_some(idx))
+        .collect::<Vec<_>>();
+    let mut delta = DMatrix::<f64>::zeros(n_stats, free_indices.len());
+
+    for (col, row) in free_indices.iter().enumerate() {
+        delta[(*row, col)] = 1.0;
+    }
+
+    let target = observed.clone() - fixed.clone();
+    let hessian = delta.transpose() * &wls_v * &delta;
+    let rhs = delta.transpose() * &wls_v * &target;
+    let Some(params) = hessian.clone().lu().solve(&rhs) else {
+        return Err(Error::Other("observed covariance solve failed".into()));
+    };
+
+    let implied_vec = fixed + &delta * &params;
+    let implied = from_vech(&implied_vec, n);
+    let residual = observed - implied_vec;
+    let bread = hessian
+        .try_inverse()
+        .unwrap_or_else(|| DMatrix::<f64>::zeros(free_indices.len(), free_indices.len()));
+    let naive_se = bread.diagonal().map(|value| value.max(0.0).sqrt());
+    let objective = 0.5 * residual.dot(&(&wls_v * &residual));
+
+    Ok(list!(
+        estimates = params.as_slice().to_vec(),
+        implied = to_col_major(&implied),
+        delta = to_col_major(&delta),
+        naive_se = naive_se.as_slice().to_vec(),
+        objective = objective,
+        srmr = srmr(&sample_cov, &implied),
+        converged = true
+    ))
+}
+
 extendr_module! {
     mod lavaanrust;
     fn fit_one_factor_dwls;
+    fn fit_observed_covariance_dwls;
 }

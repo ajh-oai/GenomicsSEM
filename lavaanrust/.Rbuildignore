@@ -3,3 +3,6 @@
 ^src/rust/target$
 ^src/Makevars$
 ^src/Makevars\.win$
+^src/symbols\.rds$
+^\.gitignore$
+^src/\.gitignore$
