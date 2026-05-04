@@ -14,11 +14,12 @@
   rust_env$parTable <- lavaanrust::parTable_rust
   rust_env$fitted <- lavaanrust::fitted_rust
   rust_env$resid <- lavaanrust::resid_rust
+  rust_env$standardizedSolution <- lavaanrust::standardizedSolution_rust
   rust_env$lav_model_get_parameters <- lavaanrust::lav_model_get_parameters_rust
   rust_env$lav_func_jacobian_complex <- lavaanrust::lav_func_jacobian_complex_rust
   rust_env$class <- function(x) {
     if (methods::is(x, "lavaan_rust_fit")) {
-      return(c("lavaan", "lavaan_rust_fit"))
+      return("lavaan")
     }
 
     base::class(x)
@@ -37,6 +38,14 @@
 # This reuses the exact original function body while rebinding only the lavaan
 # surface underneath it.
 commonfactor_rust <- .with_lavaan_rust_backend(commonfactor)
+usermodel_rust <- function(...) {
+  rust_fun <- .with_lavaan_rust_backend(
+    usermodel,
+    helper_names = ".rearrange"
+  )
+
+  rust_fun(...)
+}
 commonfactorGWAS_rust <- function(...) {
   dots <- list(...)
   parallel <- if ("parallel" %in% names(dots)) dots$parallel else formals(commonfactorGWAS)$parallel

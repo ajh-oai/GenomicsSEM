@@ -135,3 +135,64 @@ Synthetic 3-trait fixture, macOS laptop, 2026-05-04:
    parallel worker support or move next to `usermodel_rust()`.
 2. Broaden parser and constraint support only where another GenomicSEM wrapper
    actually needs it.
+
+## 2026-05-04 13:20 PDT
+
+### Implemented
+
+- Added the first strict `usermodel_rust()` slice while keeping the original
+  GenomicSEM `usermodel()` body intact.
+- Added support for simple one-factor user models such as
+  `F1 =~ A + B + C`:
+  - marker scaling when `std.lv = FALSE`
+  - latent-variance scaling when `std.lv = TRUE`
+- Added the minimal `standardizedSolution_rust()` compatibility surface needed
+  by the unchanged `usermodel()` standardized-output path.
+- Split the implicit `std.lv = TRUE` constructor from the explicit
+  `F1 ~~ 1*F1` constructor so parameter-table row order matches lavaan for both
+  syntactic forms.
+- Tightened the class shim used by rust-bound wrappers so exact upstream checks
+  such as `class(x) != "lavaan"` continue to behave like the original code.
+
+### Current support boundary
+
+`usermodel_rust()` currently supports simple one-factor DWLS models with no:
+
+- labels or equality constraints
+- inequality constraints
+- user-defined parameters via `:=`
+- regressions
+- multiple latent factors
+
+Unsupported user-model syntax still errors through `sem_rust()` and does not
+fall back to lavaan.
+
+### Validation
+
+- `lavaanrust/tests/testthat`: 28 passing tests.
+- Frozen lavaan 0.6-21 fixtures for:
+  - marker-scaled one-factor user models
+  - `std.lv = TRUE` one-factor user models
+  - standardized-solution rows consumed by `usermodel()`
+- Synthetic `usermodel()` smoke, simple marker-scaled one-factor model:
+  - max unstandardized estimate difference: `7.17e-09`
+  - max sandwich SE difference: `1.60e-09`
+  - max `STD_Genotype` difference: `1.11e-08`
+  - max `STD_All` difference: `5.97e-09`
+
+### Local benchmarks
+
+Synthetic 3-trait fixture, macOS laptop, 2026-05-04:
+
+| Benchmark | lavaan | rust-backed | Speedup |
+| --- | ---: | ---: | ---: |
+| direct user-model `sem()` fit | `0.017000 s` | `0.001000 s` | `17.00x` |
+| end-to-end simple `usermodel()` smoke | `0.067000 s` | `0.005000 s` | `13.40x` |
+
+### Next packet
+
+1. Expand the user-model parser one feature at a time, starting with the
+   smallest syntax family that unlocks a real GenomicSEM workflow beyond the
+   current one-factor case.
+2. Likely next targets are either constrained one-factor models or the
+   user-defined-parameter machinery needed for `:=`.

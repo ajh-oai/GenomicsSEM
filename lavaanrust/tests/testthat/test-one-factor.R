@@ -18,7 +18,11 @@ test_that("one-factor DWLS slice matches frozen lavaan fixtures", {
 
 test_that("unsupported syntax errors instead of falling back to lavaan", {
   fixture <- one_factor_fixture()
-  model <- "F1 =~ A + B + C"
+  model <- paste(
+    "F1 =~ A + B + C",
+    "F2 =~ A + B + C",
+    sep = "\n"
+  )
   expect_error(
     lavaanrust::sem_rust(
       model,

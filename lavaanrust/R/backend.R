@@ -32,6 +32,41 @@
   identical(variance_no_space, paste0(latent, "~~1*", latent))
 }
 
+.parse_simple_one_factor_model <- function(model) {
+  if (!is.character(model) || length(model) != 1L) {
+    return(NULL)
+  }
+
+  lines <- trimws(strsplit(model, "\n", fixed = TRUE)[[1L]])
+  lines <- lines[nzchar(lines)]
+
+  if (length(lines) != 1L || !grepl("=~", lines, fixed = TRUE)) {
+    return(NULL)
+  }
+
+  parts <- trimws(strsplit(lines, "=~", fixed = TRUE)[[1L]])
+  if (length(parts) != 2L) {
+    return(NULL)
+  }
+
+  latent_name <- parts[[1L]]
+  observed_names <- trimws(strsplit(parts[[2L]], "+", fixed = TRUE)[[1L]])
+  observed_names <- observed_names[nzchar(observed_names)]
+
+  if (
+    !nzchar(latent_name) ||
+      length(observed_names) < 2L ||
+      any(grepl("[*:=~><]", observed_names))
+  ) {
+    return(NULL)
+  }
+
+  list(
+    latent_name = latent_name,
+    observed_names = observed_names
+  )
+}
+
 .one_factor_latent_name <- function(model) {
   loading_line <- trimws(strsplit(model, "\n", fixed = TRUE)[[1L]])
   loading_line <- loading_line[grepl("=~", loading_line, fixed = TRUE)][[1L]]
@@ -138,6 +173,195 @@
     Options = list(estimator = "DWLS"),
     Data = list(observed_names = observed_names),
     Model = list(model_kind = "one_factor_dwls", model = model)
+  )
+}
+
+.simple_std_lv_one_factor_par_table <- function(observed_names, latent_name, fit) {
+  k <- length(observed_names)
+  ids <- seq_len(2L * k + 1L)
+  free <- c(seq_len(k), k + seq_len(k), 0L)
+  est <- c(fit$loadings, fit$residuals, 1)
+  se <- c(fit$naive_se[seq_len(k)], fit$naive_se[k + seq_len(k)], 0)
+
+  data.frame(
+    id = ids,
+    lhs = c(rep(latent_name, k), observed_names, latent_name),
+    op = c(rep("=~", k), rep("~~", k), "~~"),
+    rhs = c(observed_names, observed_names, latent_name),
+    user = c(rep(1L, k), rep(0L, k + 1L)),
+    block = rep(1L, 2L * k + 1L),
+    group = rep(1L, 2L * k + 1L),
+    free = free,
+    ustart = c(rep(NA_real_, 2L * k), 1),
+    exo = rep(0L, 2L * k + 1L),
+    label = rep("", 2L * k + 1L),
+    plabel = paste0(".p", ids, "."),
+    start = est,
+    est = est,
+    se = se,
+    stringsAsFactors = FALSE
+  )
+}
+
+.new_simple_std_lv_one_factor_fit <- function(model, sample.cov, WLS.V, fit) {
+  spec <- .parse_simple_one_factor_model(model)
+  observed_names <- spec$observed_names
+  dimnames(sample.cov) <- list(observed_names, observed_names)
+  k <- length(observed_names)
+  n_stats <- k * (k + 1L) / 2L
+  delta <- matrix(fit$delta, nrow = n_stats, ncol = 2L * k)
+  implied <- matrix(fit$implied, nrow = k, ncol = k)
+  dimnames(implied) <- dimnames(sample.cov)
+  dimnames(delta) <- list(
+    .stat_names(observed_names),
+    c(
+      paste0(spec$latent_name, "=~", observed_names),
+      paste0(observed_names, "~~", observed_names)
+    )
+  )
+  par_table <- .simple_std_lv_one_factor_par_table(observed_names, spec$latent_name, fit)
+  fit_stats <- c(
+    npar = 2L * k,
+    fmin = fit$objective,
+    chisq = 2 * fit$objective,
+    df = n_stats - 2L * k,
+    srmr = fit$srmr
+  )
+
+  methods::new(
+    "lavaan_rust_fit",
+    ParTable = par_table,
+    observed = sample.cov,
+    implied = list(cov = implied),
+    delta = delta,
+    WLS.V = WLS.V,
+    fit = fit_stats,
+    cor.lv = matrix(1, nrow = 1L, ncol = 1L, dimnames = list(spec$latent_name, spec$latent_name)),
+    se = list(theta = implied),
+    converged = isTRUE(fit$converged),
+    observed_names = observed_names,
+    latent_name = spec$latent_name,
+    model_kind = "simple_std_lv_one_factor_dwls",
+    Options = list(estimator = "DWLS"),
+    Data = list(observed_names = observed_names),
+    Model = list(model_kind = "simple_std_lv_one_factor_dwls", model = model)
+  )
+}
+
+.marker_one_factor_par_table <- function(observed_names, latent_name, fit) {
+  k <- length(observed_names)
+  ids <- seq_len(2L * k + 1L)
+  free <- c(0L, if (k > 1L) seq_len(k - 1L) else integer(), k - 1L + seq_len(k), 2L * k)
+  est <- c(fit$loadings, fit$residuals, fit$phi)
+  se <- c(0, if (k > 1L) fit$naive_se[seq_len(k - 1L)] else numeric(), fit$naive_se[k - 1L + seq_len(k)], fit$naive_se[[2L * k]])
+
+  data.frame(
+    id = ids,
+    lhs = c(rep(latent_name, k), observed_names, latent_name),
+    op = c(rep("=~", k), rep("~~", k), "~~"),
+    rhs = c(observed_names, observed_names, latent_name),
+    user = c(rep(1L, k), rep(0L, k + 1L)),
+    block = rep(1L, 2L * k + 1L),
+    group = rep(1L, 2L * k + 1L),
+    free = free,
+    ustart = c(1, rep(NA_real_, k - 1L), rep(NA_real_, k + 1L)),
+    exo = rep(0L, 2L * k + 1L),
+    label = rep("", 2L * k + 1L),
+    plabel = paste0(".p", ids, "."),
+    start = est,
+    est = est,
+    se = se,
+    stringsAsFactors = FALSE
+  )
+}
+
+.marker_one_factor_delta <- function(loadings, phi) {
+  k <- length(loadings)
+  delta <- matrix(0, nrow = k * (k + 1L) / 2L, ncol = 2L * k)
+  row_idx <- 1L
+
+  for (col_idx in seq_len(k)) {
+    for (row_obs in col_idx:k) {
+      if (row_obs > 1L) {
+        delta[row_idx, row_obs - 1L] <- delta[row_idx, row_obs - 1L] + phi * loadings[[col_idx]]
+      }
+
+      if (col_idx > 1L) {
+        delta[row_idx, col_idx - 1L] <- delta[row_idx, col_idx - 1L] + phi * loadings[[row_obs]]
+      }
+
+      if (identical(row_obs, col_idx)) {
+        delta[row_idx, k - 1L + row_obs] <- 1
+      }
+
+      delta[row_idx, 2L * k] <- loadings[[row_obs]] * loadings[[col_idx]]
+      row_idx <- row_idx + 1L
+    }
+  }
+
+  delta
+}
+
+.new_marker_one_factor_fit <- function(model, sample.cov, WLS.V, fit) {
+  spec <- .parse_simple_one_factor_model(model)
+  observed_names <- spec$observed_names
+  dimnames(sample.cov) <- list(observed_names, observed_names)
+  marker_loading <- fit$loadings[[1L]]
+
+  if (abs(marker_loading) < sqrt(.Machine$double.eps)) {
+    stop("Marker-scaled one-factor rust slice requires a non-zero first loading.", call. = FALSE)
+  }
+
+  loadings <- fit$loadings / marker_loading
+  phi <- marker_loading^2
+  implied <- matrix(fit$implied, nrow = length(observed_names), ncol = length(observed_names))
+  dimnames(implied) <- dimnames(sample.cov)
+  delta <- .marker_one_factor_delta(loadings, phi)
+  dimnames(delta) <- list(
+    .stat_names(observed_names),
+    c(
+      paste0(spec$latent_name, "=~", observed_names[-1L]),
+      paste0(observed_names, "~~", observed_names),
+      paste0(spec$latent_name, "~~", spec$latent_name)
+    )
+  )
+  bread <- solve(t(delta) %*% WLS.V %*% delta)
+  marker_fit <- list(
+    loadings = loadings,
+    residuals = fit$residuals,
+    phi = phi,
+    naive_se = sqrt(pmax(diag(bread), 0)),
+    objective = fit$objective,
+    srmr = fit$srmr,
+    converged = fit$converged
+  )
+  par_table <- .marker_one_factor_par_table(observed_names, spec$latent_name, marker_fit)
+  npar <- 2L * length(observed_names)
+  fit_stats <- c(
+    npar = npar,
+    fmin = fit$objective,
+    chisq = 2 * fit$objective,
+    df = nrow(delta) - npar,
+    srmr = fit$srmr
+  )
+
+  methods::new(
+    "lavaan_rust_fit",
+    ParTable = par_table,
+    observed = sample.cov,
+    implied = list(cov = implied),
+    delta = delta,
+    WLS.V = WLS.V,
+    fit = fit_stats,
+    cor.lv = matrix(phi, nrow = 1L, ncol = 1L, dimnames = list(spec$latent_name, spec$latent_name)),
+    se = list(theta = implied),
+    converged = isTRUE(fit$converged),
+    observed_names = observed_names,
+    latent_name = spec$latent_name,
+    model_kind = "marker_one_factor_dwls",
+    Options = list(estimator = "DWLS"),
+    Data = list(observed_names = observed_names),
+    Model = list(model_kind = "marker_one_factor_dwls", model = model)
   )
 }
 
@@ -734,6 +958,9 @@
 #'   compatibility; unsupported paths still error.
 #' @export
 sem_rust <- function(model, sample.cov, estimator = "ML", WLS.V = NULL, ...) {
+  dots <- list(...)
+  std.lv <- isTRUE(dots$std.lv)
+
   if (
     identical(estimator, "DWLS") &&
       .is_one_factor_dwls_model(model) &&
@@ -748,6 +975,27 @@ sem_rust <- function(model, sample.cov, estimator = "ML", WLS.V = NULL, ...) {
       1e-12
     )
     return(.new_one_factor_fit(model, sample.cov, WLS.V, fit))
+  }
+
+  if (
+    identical(estimator, "DWLS") &&
+      !is.null(.parse_simple_one_factor_model(model)) &&
+      is.matrix(sample.cov) &&
+      is.matrix(WLS.V)
+  ) {
+    fit <- fit_one_factor_dwls(
+      as.double(sample.cov),
+      as.double(WLS.V),
+      as.integer(nrow(sample.cov)),
+      200L,
+      1e-12
+    )
+
+    if (std.lv) {
+      return(.new_simple_std_lv_one_factor_fit(model, sample.cov, WLS.V, fit))
+    }
+
+    return(.new_marker_one_factor_fit(model, sample.cov, WLS.V, fit))
   }
 
   if (
@@ -915,6 +1163,56 @@ resid_rust <- function(object, ...) {
   }
 
   list(cov = object@observed - object@implied$cov)
+}
+
+#' Rust-backed experimental replacement for `lavaan::standardizedSolution()`.
+#'
+#' @param object A `lavaan_rust_fit` object.
+#' @param ... Reserved for lavaan-compatible arguments.
+#' @export
+standardizedSolution_rust <- function(object, ...) {
+  if (!methods::is(object, "lavaan_rust_fit")) {
+    stop("standardizedSolution_rust() only supports lavaan_rust_fit objects.", call. = FALSE)
+  }
+
+  if (!object@model_kind %in% c("marker_one_factor_dwls", "one_factor_dwls", "simple_std_lv_one_factor_dwls")) {
+    stop("Unsupported standardizedSolution_rust() model path.", call. = FALSE)
+  }
+
+  par_table <- object@ParTable
+  observed_sd <- sqrt(diag(object@implied$cov))
+  names(observed_sd) <- object@observed_names
+  latent_var <- if (object@model_kind == "marker_one_factor_dwls") {
+    par_table$est[par_table$lhs == object@latent_name & par_table$op == "~~" & par_table$rhs == object@latent_name][[1L]]
+  } else {
+    1
+  }
+  est.std <- par_table$est
+
+  loading_rows <- which(par_table$op == "=~")
+  est.std[loading_rows] <- par_table$est[loading_rows] * sqrt(latent_var) / observed_sd[par_table$rhs[loading_rows]]
+
+  residual_rows <- which(par_table$op == "~~" & par_table$lhs %in% object@observed_names & par_table$lhs == par_table$rhs)
+  est.std[residual_rows] <- par_table$est[residual_rows] / diag(object@implied$cov)[match(par_table$lhs[residual_rows], object@observed_names)]
+
+  latent_rows <- which(par_table$op == "~~" & par_table$lhs == object@latent_name & par_table$rhs == object@latent_name)
+  est.std[latent_rows] <- 1
+
+  pvalue <- rep(0, nrow(par_table))
+  pvalue[latent_rows] <- NA_real_
+
+  data.frame(
+    lhs = par_table$lhs,
+    op = par_table$op,
+    rhs = par_table$rhs,
+    est.std = est.std,
+    se = rep(0, nrow(par_table)),
+    z = rep(NA_real_, nrow(par_table)),
+    pvalue = pvalue,
+    ci.lower = est.std,
+    ci.upper = est.std,
+    stringsAsFactors = FALSE
+  )
 }
 
 #' Rust-backed experimental replacement for lavaan's parameter extractor.
