@@ -774,6 +774,160 @@
   .new_commonfactor_gwas_fit(model, sample.cov, WLS.V, fit)
 }
 
+.parse_user_gwas_model <- function(model) {
+  if (!is.character(model) || length(model) != 1L) {
+    return(NULL)
+  }
+
+  lines <- trimws(strsplit(model, "\n", fixed = TRUE)[[1L]])
+  lines <- lines[nzchar(lines)]
+  loading_line <- lines[grepl("=~", lines, fixed = TRUE)]
+  regression_line <- lines[grepl("~", lines, fixed = TRUE) & !grepl("=~", lines, fixed = TRUE)]
+
+  if (length(lines) != 2L || length(loading_line) != 1L || length(regression_line) != 1L) {
+    return(NULL)
+  }
+
+  loading_parts <- trimws(strsplit(loading_line, "=~", fixed = TRUE)[[1L]])
+  if (length(loading_parts) != 2L) {
+    return(NULL)
+  }
+
+  latent_name <- loading_parts[[1L]]
+  traits <- trimws(strsplit(loading_parts[[2L]], "+", fixed = TRUE)[[1L]])
+  traits <- traits[nzchar(traits)]
+  regression_parts <- trimws(strsplit(regression_line, "~", fixed = TRUE)[[1L]])
+
+  if (
+    length(regression_parts) != 2L ||
+      !identical(regression_parts[[1L]], latent_name) ||
+      !nzchar(regression_parts[[2L]]) ||
+      length(traits) < 2L ||
+      any(grepl("[*:=~><]", traits))
+  ) {
+    return(NULL)
+  }
+
+  list(
+    latent_name = latent_name,
+    predictor = regression_parts[[2L]],
+    traits = traits
+  )
+}
+
+.user_gwas_par_table <- function(spec, fit) {
+  k <- length(spec$traits)
+  n_rows <- 2L * k + 3L
+  free <- c(
+    0L,
+    if (k > 1L) seq_len(k - 1L) else integer(),
+    k,
+    k + seq_len(k),
+    2L * k + 1L,
+    2L * k + 2L
+  )
+  est <- c(
+    fit$loadings,
+    fit$gamma,
+    fit$residuals,
+    fit$psi,
+    fit$phi
+  )
+  se <- c(
+    0,
+    if (k > 1L) fit$naive_se[seq_len(k - 1L)] else numeric(),
+    fit$naive_se[[k]],
+    fit$naive_se[k + seq_len(k)],
+    fit$naive_se[[2L * k + 1L]],
+    fit$naive_se[[2L * k + 2L]]
+  )
+
+  data.frame(
+    id = seq_len(n_rows),
+    lhs = c(rep(spec$latent_name, k), spec$latent_name, spec$traits, spec$latent_name, spec$predictor),
+    op = c(rep("=~", k), "~", rep("~~", k), "~~", "~~"),
+    rhs = c(spec$traits, spec$predictor, spec$traits, spec$latent_name, spec$predictor),
+    user = c(rep(1L, k + 1L), rep(0L, k + 2L)),
+    block = rep(1L, n_rows),
+    group = rep(1L, n_rows),
+    free = as.integer(free),
+    ustart = c(1, rep(NA_real_, k - 1L), rep(NA_real_, k + 3L)),
+    exo = rep(0L, n_rows),
+    label = rep("", n_rows),
+    plabel = paste0(".p", seq_len(n_rows), "."),
+    start = est,
+    est = est,
+    se = se,
+    stringsAsFactors = FALSE
+  )
+}
+
+.new_user_gwas_fit <- function(model, sample.cov, WLS.V, fit) {
+  spec <- .parse_user_gwas_model(model)
+  observed_names <- c(spec$predictor, spec$traits)
+  dimnames(sample.cov) <- list(observed_names, observed_names)
+  delta <- matrix(fit$delta, nrow = length(.stat_names(observed_names)))
+  dimnames(delta) <- list(
+    .stat_names(observed_names),
+    c(
+      paste0(spec$latent_name, "=~", spec$traits[-1L]),
+      paste0(spec$latent_name, "~", spec$predictor),
+      paste0(spec$traits, "~~", spec$traits),
+      paste0(spec$latent_name, "~~", spec$latent_name),
+      paste0(spec$predictor, "~~", spec$predictor)
+    )
+  )
+  implied <- matrix(fit$implied, nrow = nrow(sample.cov), ncol = ncol(sample.cov))
+  dimnames(implied) <- dimnames(sample.cov)
+  par_table <- .user_gwas_par_table(spec, fit)
+  npar <- 2L * length(spec$traits) + 2L
+  fit_stats <- c(
+    npar = npar,
+    fmin = fit$objective,
+    chisq = 2 * fit$objective,
+    df = length(.stat_names(observed_names)) - npar,
+    srmr = fit$srmr
+  )
+
+  methods::new(
+    "lavaan_rust_fit",
+    ParTable = par_table,
+    observed = sample.cov,
+    implied = list(cov = implied),
+    delta = delta,
+    WLS.V = WLS.V,
+    fit = fit_stats,
+    cor.lv = matrix(1, nrow = 1L, ncol = 1L, dimnames = list(spec$latent_name, spec$latent_name)),
+    se = list(theta = matrix(0, nrow = nrow(sample.cov), ncol = ncol(sample.cov))),
+    converged = isTRUE(fit$converged),
+    observed_names = observed_names,
+    latent_name = spec$latent_name,
+    model_kind = "user_gwas_dwls",
+    Options = list(estimator = "DWLS"),
+    Data = list(observed_names = observed_names),
+    Model = list(model_kind = "user_gwas_dwls", model = model)
+  )
+}
+
+.fit_user_gwas_model <- function(model, sample.cov, WLS.V) {
+  spec <- .parse_user_gwas_model(model)
+  observed_names <- c(spec$predictor, spec$traits)
+
+  if (!identical(colnames(sample.cov), observed_names) && !identical(rownames(sample.cov), observed_names)) {
+    stop("userGWAS rust slice requires sample.cov ordered as predictor followed by indicators.", call. = FALSE)
+  }
+
+  fit <- fit_commonfactor_gwas_dwls(
+    as.double(sample.cov),
+    as.double(WLS.V),
+    as.integer(length(spec$traits)),
+    400L,
+    1e-12
+  )
+
+  .new_user_gwas_fit(model, sample.cov, WLS.V, fit)
+}
+
 .par_value_rust <- function(par_table, row_idx) {
   if (!length(row_idx)) {
     return(0)
@@ -948,6 +1102,160 @@
   .new_commonfactor_gwas_q_fit(par_table, sample.cov, WLS.V, spec, fit)
 }
 
+.user_gwas_fixed_measurement_spec <- function(par_table) {
+  if (!is.data.frame(par_table)) {
+    return(NULL)
+  }
+
+  loading_rows <- which(par_table$op == "=~")
+  latent_names <- unique(par_table$lhs[loading_rows])
+  if (length(latent_names) != 1L) {
+    return(NULL)
+  }
+
+  latent_name <- latent_names[[1L]]
+  traits <- par_table$rhs[loading_rows]
+  factor_regression <- which(
+    par_table$op == "~" &
+      par_table$lhs == latent_name
+  )
+  residual_rows <- vapply(
+    traits,
+    function(trait) {
+      rows <- which(
+        par_table$op == "~~" &
+          par_table$lhs == trait &
+          par_table$rhs == trait
+      )
+      if (length(rows) != 1L) {
+        return(NA_integer_)
+      }
+
+      rows[[1L]]
+    },
+    integer(1L)
+  )
+  psi_row <- which(
+    par_table$op == "~~" &
+      par_table$lhs == latent_name &
+      par_table$rhs == latent_name
+  )
+
+  if (length(factor_regression) != 1L || anyNA(residual_rows) || length(psi_row) != 1L) {
+    return(NULL)
+  }
+
+  predictor <- par_table$rhs[[factor_regression]]
+  phi_row <- which(
+    par_table$op == "~~" &
+      par_table$lhs == predictor &
+      par_table$rhs == predictor
+  )
+  direct_rows <- which(
+    par_table$op == "~" &
+      par_table$lhs %in% traits &
+      par_table$rhs == predictor
+  )
+
+  if (
+    length(phi_row) != 1L ||
+      length(direct_rows) > 0L ||
+      any(par_table$free[loading_rows] != 0L) ||
+      any(par_table$free[c(residual_rows, psi_row, factor_regression, phi_row)] <= 0L)
+  ) {
+    return(NULL)
+  }
+
+  list(
+    latent_name = latent_name,
+    predictor = predictor,
+    traits = traits,
+    loading_rows = loading_rows,
+    residual_rows = residual_rows,
+    psi_row = psi_row[[1L]],
+    factor_regression = factor_regression[[1L]],
+    phi_row = phi_row[[1L]]
+  )
+}
+
+.new_user_gwas_fixed_measurement_fit <- function(par_table, sample.cov, WLS.V, spec, fit) {
+  observed_names <- c(spec$predictor, spec$traits)
+  dimnames(sample.cov) <- list(observed_names, observed_names)
+  implied <- matrix(fit$implied, nrow = nrow(sample.cov), ncol = ncol(sample.cov))
+  dimnames(implied) <- dimnames(sample.cov)
+  delta <- matrix(fit$delta, nrow = length(.stat_names(observed_names)))
+  dimnames(delta) <- list(
+    .stat_names(observed_names),
+    c(
+      paste0(spec$traits, "~~", spec$traits),
+      paste0(spec$latent_name, "~~", spec$latent_name),
+      paste0(spec$latent_name, "~", spec$predictor),
+      paste0(spec$predictor, "~~", spec$predictor)
+    )
+  )
+  par_table <- as.data.frame(par_table, stringsAsFactors = FALSE)
+  rownames(par_table) <- NULL
+  free_rows <- c(spec$residual_rows, spec$psi_row, spec$factor_regression, spec$phi_row)
+  par_table$free[] <- 0L
+  par_table$free[free_rows] <- seq_along(free_rows)
+  par_table$est[spec$residual_rows] <- fit$residuals
+  par_table$est[spec$psi_row] <- fit$psi
+  par_table$est[spec$factor_regression] <- fit$gamma
+  par_table$est[spec$phi_row] <- fit$phi
+  par_table$se[] <- 0
+  par_table$se[free_rows] <- fit$naive_se
+  npar <- length(free_rows)
+  fit_stats <- c(
+    npar = npar,
+    fmin = fit$objective,
+    chisq = 2 * fit$objective,
+    df = length(.stat_names(observed_names)) - npar,
+    srmr = fit$srmr
+  )
+
+  methods::new(
+    "lavaan_rust_fit",
+    ParTable = par_table,
+    observed = sample.cov,
+    implied = list(cov = implied),
+    delta = delta,
+    WLS.V = WLS.V,
+    fit = fit_stats,
+    cor.lv = matrix(1, nrow = 1L, ncol = 1L, dimnames = list(spec$latent_name, spec$latent_name)),
+    se = list(theta = matrix(0, nrow = nrow(sample.cov), ncol = ncol(sample.cov))),
+    converged = isTRUE(fit$converged),
+    observed_names = observed_names,
+    latent_name = spec$latent_name,
+    model_kind = "user_gwas_fixed_measurement_dwls",
+    Options = list(estimator = "DWLS"),
+    Data = list(observed_names = observed_names),
+    Model = list(model_kind = "user_gwas_fixed_measurement_dwls", par_table = par_table)
+  )
+}
+
+.fit_user_gwas_fixed_measurement_model <- function(par_table, sample.cov, WLS.V, spec) {
+  observed_names <- c(spec$predictor, spec$traits)
+
+  if (!identical(colnames(sample.cov), observed_names) && !identical(rownames(sample.cov), observed_names)) {
+    stop("userGWAS fixed-measurement rust slice requires sample.cov ordered as predictor followed by indicators.", call. = FALSE)
+  }
+
+  fit <- fit_user_gwas_fixed_measurement_dwls(
+    as.double(sample.cov),
+    as.double(WLS.V),
+    as.double(par_table$est[spec$loading_rows]),
+    as.double(par_table$est[spec$residual_rows]),
+    as.double(.par_value_rust(par_table, spec$psi_row)),
+    as.double(.par_value_rust(par_table, spec$factor_regression)),
+    as.double(.par_value_rust(par_table, spec$phi_row)),
+    as.integer(length(spec$traits)),
+    400L,
+    1e-12
+  )
+
+  .new_user_gwas_fixed_measurement_fit(par_table, sample.cov, WLS.V, spec, fit)
+}
+
 #' Rust-backed experimental replacement for the supported `lavaan::sem()` slice.
 #'
 #' @param model A supported lavaan-style model string or parameter table.
@@ -1009,6 +1317,15 @@ sem_rust <- function(model, sample.cov, estimator = "ML", WLS.V = NULL, ...) {
 
   if (
     identical(estimator, "DWLS") &&
+      !is.null(.parse_user_gwas_model(model)) &&
+      is.matrix(sample.cov) &&
+      is.matrix(WLS.V)
+  ) {
+    return(.fit_user_gwas_model(model, sample.cov, WLS.V))
+  }
+
+  if (
+    identical(estimator, "DWLS") &&
       .is_commonfactor_null_model(model) &&
       is.matrix(sample.cov) &&
       is.matrix(WLS.V)
@@ -1035,6 +1352,11 @@ sem_rust <- function(model, sample.cov, estimator = "ML", WLS.V = NULL, ...) {
       is.matrix(sample.cov) &&
       is.matrix(WLS.V)
   ) {
+    user_gwas_spec <- .user_gwas_fixed_measurement_spec(model)
+    if (!is.null(user_gwas_spec)) {
+      return(.fit_user_gwas_fixed_measurement_model(model, sample.cov, WLS.V, user_gwas_spec))
+    }
+
     q_spec <- .commonfactor_gwas_q_spec(model)
     if (!is.null(q_spec)) {
       return(.fit_commonfactor_gwas_q_model(model, sample.cov, WLS.V, q_spec))
@@ -1073,6 +1395,19 @@ lavaan_rust <- function(sample.cov, WLS.V = NULL, slotOptions = NULL, slotParTab
       is.matrix(WLS.V)
   ) {
     return(.fit_commonfactor_gwas_model(slotModel$model, sample.cov, WLS.V))
+  }
+
+  if (
+    is.list(slotModel) &&
+      identical(slotModel$model_kind, "user_gwas_fixed_measurement_dwls") &&
+      is.data.frame(slotModel$par_table) &&
+      is.matrix(sample.cov) &&
+      is.matrix(WLS.V)
+  ) {
+    spec <- .user_gwas_fixed_measurement_spec(slotModel$par_table)
+    if (!is.null(spec)) {
+      return(.fit_user_gwas_fixed_measurement_model(slotModel$par_table, sample.cov, WLS.V, spec))
+    }
   }
 
   stop(

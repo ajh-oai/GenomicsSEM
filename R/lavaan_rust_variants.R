@@ -64,3 +64,54 @@ commonfactorGWAS_rust <- function(...) {
 
   rust_fun(...)
 }
+
+userGWAS_rust <- function(...) {
+  dots <- list(...)
+  parallel <- if ("parallel" %in% names(dots)) dots$parallel else formals(userGWAS)$parallel
+  fix_measurement <- if ("fix_measurement" %in% names(dots)) dots$fix_measurement else formals(userGWAS)$fix_measurement
+  q_snp <- if ("Q_SNP" %in% names(dots)) dots$Q_SNP else formals(userGWAS)$Q_SNP
+  estimation <- if ("estimation" %in% names(dots)) dots$estimation else formals(userGWAS)$estimation
+  twas <- if ("TWAS" %in% names(dots)) dots$TWAS else formals(userGWAS)$TWAS
+
+  if (isTRUE(parallel)) {
+    stop(
+      "userGWAS_rust() currently supports parallel = FALSE only; the rust wrapper does not fall back to the original parallel worker path.",
+      call. = FALSE
+    )
+  }
+
+  if (!isTRUE(fix_measurement)) {
+    stop(
+      "userGWAS_rust() currently supports fix_measurement = TRUE only; unsupported paths do not fall back to lavaan.",
+      call. = FALSE
+    )
+  }
+
+  if (isTRUE(q_snp)) {
+    stop(
+      "userGWAS_rust() currently supports Q_SNP = FALSE only; unsupported paths do not fall back to lavaan.",
+      call. = FALSE
+    )
+  }
+
+  if (!identical(estimation, "DWLS")) {
+    stop(
+      "userGWAS_rust() currently supports estimation = \"DWLS\" only; unsupported paths do not fall back to lavaan.",
+      call. = FALSE
+    )
+  }
+
+  if (isTRUE(twas)) {
+    stop(
+      "userGWAS_rust() currently supports TWAS = FALSE only; unsupported paths do not fall back to lavaan.",
+      call. = FALSE
+    )
+  }
+
+  rust_fun <- .with_lavaan_rust_backend(
+    userGWAS,
+    helper_names = c(".userGWAS_main", ".rearrange")
+  )
+
+  rust_fun(...)
+}

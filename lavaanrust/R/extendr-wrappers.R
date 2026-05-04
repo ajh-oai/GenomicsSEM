@@ -58,4 +58,19 @@ fit_commonfactor_gwas_dwls <- function(sample_cov, wls_v, k, max_iter, tol) .Cal
 #' @export
 fit_commonfactor_gwas_q_dwls <- function(sample_cov, wls_v, loadings, gamma, direct, residuals, psi, phi, k, max_iter, tol) .Call(wrap__fit_commonfactor_gwas_q_dwls, sample_cov, wls_v, loadings, gamma, direct, residuals, psi, phi, k, max_iter, tol)
 
+#' Fit the fixed-measurement one-factor GWAS DWLS slice used by the default
+#' `userGWAS(..., fix_measurement = TRUE)` path.
+#' @param sample_cov Flattened observed covariance matrix.
+#' @param wls_v Flattened DWLS weight matrix.
+#' @param loadings Fixed marker-scaled trait loadings.
+#' @param residuals Initial trait residual variances.
+#' @param psi Initial factor residual variance.
+#' @param gamma Initial factor regression coefficient.
+#' @param phi Initial SNP variance.
+#' @param k Number of trait indicators.
+#' @param max_iter Maximum optimizer iterations.
+#' @param tol Convergence tolerance.
+#' @export
+fit_user_gwas_fixed_measurement_dwls <- function(sample_cov, wls_v, loadings, residuals, psi, gamma, phi, k, max_iter, tol) .Call(wrap__fit_user_gwas_fixed_measurement_dwls, sample_cov, wls_v, loadings, residuals, psi, gamma, phi, k, max_iter, tol)
+
 # nolint end
