@@ -76,3 +76,30 @@ test_that("lavaan_fast compiler rejects syntax outside the first RAM subset", {
     "does not yet support operators"
   )
 })
+
+test_that("lavaan_fast generic DWLS optimizer reproduces fixed-measurement userGWAS fit", {
+  fixture <- user_gwas_fixture()
+  specialized <- lavaanrust::sem_rust(
+    fixture$fixed_model,
+    sample.cov = fixture$sample_cov,
+    estimator = "DWLS",
+    WLS.V = fixture$wls_v
+  )
+  par_table <- fixture$fixed_model
+  free_rows <- which(par_table$free > 0L)
+  par_table$free[] <- 0L
+  par_table$free[free_rows] <- seq_along(free_rows)
+  compiled <- lavaanrust:::.lavaan_fast_compile_par_table(
+    par_table,
+    colnames(fixture$sample_cov)
+  )
+  generic <- lavaanrust:::.lavaan_fast_fit_dwls_rust(
+    compiled,
+    fixture$sample_cov,
+    fixture$wls_v
+  )
+
+  expect_equal(generic$estimates, fixture$fixed_est[free_rows], tolerance = 2e-6)
+  expect_equal(generic$implied, lavaanrust::fitted_rust(specialized)$cov, tolerance = 1e-8)
+  expect_equal(generic$delta, lavaanrust::lavInspect_rust(specialized, "delta"), tolerance = 1e-8)
+})

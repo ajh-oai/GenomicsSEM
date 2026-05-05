@@ -88,4 +88,23 @@ fit_user_gwas_fixed_measurement_dwls <- function(sample_cov, wls_v, loadings, re
 #' @export
 evaluate_ram_surfaces <- function(lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, n_variables) .Call(wrap__evaluate_ram_surfaces, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, n_variables)
 
+#' Fit a generic RAM-model DWLS slice from compiled row data.
+#'
+#' This is the generic optimizer counterpart to `evaluate_ram_surfaces()`.
+#' Free diagonal covariance parameters are constrained to remain positive.
+#' @param sample_cov Flattened observed covariance matrix.
+#' @param wls_v Flattened DWLS weight matrix.
+#' @param lhs_index Parameter-table lhs row indices.
+#' @param rhs_index Parameter-table rhs row indices.
+#' @param op_code Parameter-table operator codes.
+#' @param free_index Free-parameter indices, with `0` for fixed rows.
+#' @param fixed_values Fixed row values, ignored for free rows.
+#' @param free_values Initial free-parameter values.
+#' @param observed_index Observed-variable indices in the full RAM system.
+#' @param n_variables Number of variables in the full RAM system.
+#' @param max_iter Maximum optimizer iterations.
+#' @param tol Convergence tolerance.
+#' @export
+fit_ram_dwls <- function(sample_cov, wls_v, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, n_variables, max_iter, tol) .Call(wrap__fit_ram_dwls, sample_cov, wls_v, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, n_variables, max_iter, tol)
+
 # nolint end

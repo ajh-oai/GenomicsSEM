@@ -590,3 +590,40 @@ Selected comparisons:
 1. Add a generic native DWLS optimizer over the RAM IR.
 2. Route one existing supported family through that optimizer only if the
    benchmark remains competitive with the specialized kernel.
+
+## 2026-05-04 18:53 PDT
+
+### Generic RAM optimizer
+
+- Added `fit_ram_dwls()` in Rust and the R bridge
+  `.lavaan_fast_fit_dwls_rust()`.
+- The generic optimizer now:
+  - consumes the same compiled RAM rows as the native evaluator
+  - reuses generic implied covariance and Jacobian surfaces during fitting
+  - clamps free diagonal covariance parameters positive
+  - returns estimates, implied covariance, Jacobian, naive SEs, fit objective,
+    SRMR, convergence, and iteration count
+- Added a fixed-measurement `userGWAS` fixture test showing the generic optimizer
+  reproduces the existing specialized rust-backed fit.
+
+### Validation and benchmark
+
+- Local package validation:
+  - `R CMD INSTALL lavaanrust`
+  - `Rscript -e 'testthat::test_dir("lavaanrust/tests/testthat")'`
+  - result: `53` passing tests
+- Direct low-level benchmark on the fixed-measurement user-GWAS fixture:
+  - specialized kernel, 1,000 fits: `0.014 s`
+  - generic RAM optimizer, 1,000 fits: `0.109 s`
+- Conclusion:
+  - the generic optimizer is now a viable compiler-backed coverage path
+  - it is not yet competitive with the tiny analytic kernels, so those should
+    remain the production hot paths for already-supported models
+
+### Next packet
+
+1. Broaden the compiler syntax surface enough to unlock a real currently
+   unsupported model shape.
+2. Use the generic optimizer there first, where the comparison is against
+   unsupported behavior rather than against an already-optimal specialized
+   kernel.

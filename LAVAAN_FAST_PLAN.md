@@ -53,9 +53,10 @@ the compiler seam before moving solvers onto it.
 
 ## Next compiler packets
 
-1. Add a native generic DWLS optimizer over the same RAM IR, so the hot path
-   can reuse generic surfaces without recomputing them after a specialized fit.
-2. Re-express one current family through that native compiler-backed optimizer.
+1. Use the native generic DWLS optimizer as the coverage path for model shapes
+   that do not yet have a specialized kernel.
+2. Keep the existing specialized kernels for hot paths where they are materially
+   faster than the generic solver.
 3. Add parser support for a larger syntax subset:
    - fixed coefficients
    - labels
@@ -66,5 +67,5 @@ the compiler seam before moving solvers onto it.
    layer.
 
 The decision point after that is whether `lavaan_fast` remains a compiler that
-feeds a few specialized kernels, or becomes the front end for a fully generic
-SEM optimizer.
+feeds a few specialized kernels plus a generic fallback, or becomes the front
+end for a fully generic SEM optimizer.

@@ -258,3 +258,35 @@
 
   list(implied = implied, delta = jacobian)
 }
+
+.lavaan_fast_fit_dwls_rust <- function(compiled, sample_cov, wls_v, max_iter = 400L, tol = 1e-12) {
+  fit <- fit_ram_dwls(
+    as.double(sample_cov),
+    as.double(wls_v),
+    as.integer(compiled$lhs_index),
+    as.integer(compiled$rhs_index),
+    as.integer(compiled$op_code),
+    as.integer(ifelse(is.na(compiled$free_index), 0L, compiled$free_index)),
+    as.double(ifelse(is.na(compiled$fixed_values), 0, compiled$fixed_values)),
+    as.double(compiled$default_free_values),
+    as.integer(match(compiled$observed_names, compiled$variable_names)),
+    as.integer(length(compiled$variable_names)),
+    as.integer(max_iter),
+    tol
+  )
+
+  fit$implied <- matrix(
+    fit$implied,
+    nrow = length(compiled$observed_names),
+    ncol = length(compiled$observed_names),
+    dimnames = list(compiled$observed_names, compiled$observed_names)
+  )
+  fit$delta <- matrix(
+    fit$delta,
+    nrow = length(.stat_names(compiled$observed_names)),
+    ncol = length(compiled$free_ids),
+    dimnames = list(.stat_names(compiled$observed_names), .lavaan_fast_free_labels(compiled))
+  )
+
+  fit
+}
