@@ -777,3 +777,55 @@ returning the same named matrices.
 2. If repeated surface calls remain important after that, consider a reusable
    native compiled plan or external pointer before trying to shave the public
    matrix-wrapping boundary further.
+
+## 2026-05-05 10:33 PDT
+
+### Implied-only line-search candidates
+
+- Split candidate-step evaluation in `fit_ram_dwls()` away from the full
+  surface path.
+- Candidate steps now compute only the observed implied covariance:
+  - no Jacobian construction
+  - no full implied covariance materialization before slicing down to observed
+    variables
+- Kept full implied covariance plus Jacobian construction on the current iterate
+  and final fit result, where those values are actually consumed.
+
+### Validation
+
+- Local package validation:
+  - `R CMD INSTALL lavaanrust`
+  - `Rscript -e 'testthat::test_dir("lavaanrust/tests/testthat")'`
+  - result: `64` passing tests
+
+### Benchmarks
+
+Fixed-measurement `userGWAS` generic fit fixture, 1,000 fits, local Apple
+Silicon run, median of seven repetitions:
+
+| Path | Before | After |
+| --- | ---: | ---: |
+| Generic RAM DWLS fit | `0.024 s` | `0.024 s` |
+
+Synthetic unrestricted covariance fits, same harness before vs after:
+
+| Observed vars | Fits | Before | After | Speedup |
+| ---: | ---: | ---: | ---: | ---: |
+| 8 | 500 | `0.053 s` | `0.049 s` | `1.08x` |
+| 16 | 100 | `0.239 s` | `0.232 s` | `1.03x` |
+| 24 | 30 | `0.733 s` | `0.711 s` | `1.03x` |
+
+This is a correctness-preserving cleanup and a small win, not a major remaining
+hotspot. After the previous metadata-caching packet, the generic fitter is
+already close enough on tiny models that line-search candidates are no longer
+the dominant cost.
+
+### Next packet
+
+1. Profile the generic fitter again on broader model families before adding more
+   optimizer-specific micro-optimizations.
+2. The next likely higher-leverage work is coverage, not another local fitter
+   tweak:
+   - parser/model-string support for a broader syntax subset
+   - or a reusable native compiled plan if repeated surface evaluation proves
+     material in a real workflow rather than only in microbenchmarks

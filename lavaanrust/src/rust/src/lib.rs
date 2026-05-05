@@ -379,6 +379,26 @@ fn implied_ram(
     Ok((implied, full_implied, inverse))
 }
 
+fn implied_ram_observed(
+    directed: &DMatrix<f64>,
+    covariance: &DMatrix<f64>,
+    observed_indices: &[usize],
+) -> std::result::Result<DMatrix<f64>, Error> {
+    let identity = DMatrix::<f64>::identity(directed.nrows(), directed.ncols());
+    let Some(inverse) = (identity - directed).try_inverse() else {
+        return Err(Error::Other("RAM solve failed because I - A is singular".into()));
+    };
+    let mut observed_inverse = DMatrix::<f64>::zeros(observed_indices.len(), inverse.ncols());
+
+    for (out_row, source_row) in observed_indices.iter().enumerate() {
+        for col in 0..inverse.ncols() {
+            observed_inverse[(out_row, col)] = inverse[(*source_row, col)];
+        }
+    }
+
+    Ok(&observed_inverse * covariance * observed_inverse.transpose())
+}
+
 fn validate_ram_indices(
     lhs_index: &[i32],
     rhs_index: &[i32],
@@ -611,6 +631,30 @@ fn ram_surfaces_from_rows(
     );
 
     Ok((implied, delta))
+}
+
+fn ram_implied_from_rows(
+    lhs_index: &[i32],
+    rhs_index: &[i32],
+    op_code: &[i32],
+    free_index: &[i32],
+    fixed_values: &[f64],
+    free_values: &[f64],
+    observed_indices: &[usize],
+    n_variables: usize,
+) -> std::result::Result<DMatrix<f64>, Error> {
+    let (directed, covariance) = ram_matrices_from_rows(
+        lhs_index,
+        rhs_index,
+        op_code,
+        free_index,
+        fixed_values,
+        free_values,
+        n_variables,
+    );
+    let implied = implied_ram_observed(&directed, &covariance, observed_indices)?;
+
+    Ok(implied)
 }
 
 fn covariance_variance_free_mask(
@@ -1476,7 +1520,7 @@ fn fit_ram_dwls(
             }
         }
 
-        let (next_implied, _) = ram_surfaces_from_rows(
+        let next_implied = ram_implied_from_rows(
             &lhs_index,
             &rhs_index,
             &op_code,
@@ -1484,8 +1528,6 @@ fn fit_ram_dwls(
             &fixed_values,
             next_params.as_slice(),
             &observed_indices,
-            &free_row_offsets,
-            &free_row_indices,
             n_variables,
         )?;
         let next_residual = &observed - vech(&next_implied);

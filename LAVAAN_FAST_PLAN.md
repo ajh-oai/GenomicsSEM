@@ -64,9 +64,11 @@ the compiler seam before moving solvers onto it.
      only at the public boundary
    - next: decide whether a reusable native compiled plan is worth the extra
      lifecycle complexity
-4. Make the generic optimizer cheaper:
-   - add an implied-only line-search path so candidate steps do not rebuild
+4. Keep the generic optimizer simple and measured:
+   - done: add an implied-only line-search path so candidate steps do not rebuild
      Jacobians they never consume
+   - next: profile real broader fits before pursuing more local optimizer
+     micro-optimizations
 5. Add parser support for a larger syntax subset:
    - fixed coefficients
    - labels
