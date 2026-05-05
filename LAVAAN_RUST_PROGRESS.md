@@ -553,3 +553,40 @@ Selected comparisons:
    - direct effects
    - residual covariances
    - eventually defined parameters and nonlinear constraints
+
+## 2026-05-04 18:50 PDT
+
+### Native compiler evaluator
+
+- Added `evaluate_ram_surfaces()` in Rust and the R bridge
+  `.lavaan_fast_implied_surfaces_rust()`.
+- The native evaluator consumes the compiler's row-wise RAM encoding and
+  returns both:
+  - implied observed covariance
+  - analytic Jacobian over `vech(Sigma)`
+- Added fixture checks proving the native evaluator matches the specialized
+  rust-backed `userGWAS` surfaces for both current model shapes.
+
+### Validation and profiling
+
+- Local package validation:
+  - `R CMD INSTALL lavaanrust`
+  - `Rscript -e 'testthat::test_dir("lavaanrust/tests/testthat")'`
+  - result: `50` passing tests
+- Direct evaluator timing on the unrestricted user-GWAS fixture:
+  - R reference evaluator, 10,000 calls: `2.274 s`
+  - Rust evaluator, 10,000 calls: `1.004 s`
+- I also tried routing the unrestricted `userGWAS` constructor through the
+  R-side compiler surfaces directly. That was behaviorally exact but slower:
+  - baseline specialized constructor path, 1,000 tiny fits: `0.842 s`
+  - R compiler-backed constructor path, 1,000 tiny fits: `1.134 s`
+- I did not keep that hot-path change. The next production-quality step is a
+  native generic optimizer that reuses compiler-backed surfaces during fitting,
+  instead of paying an extra post-fit reconstruction cost after a specialized
+  optimizer has already computed them.
+
+### Next packet
+
+1. Add a generic native DWLS optimizer over the RAM IR.
+2. Route one existing supported family through that optimizer only if the
+   benchmark remains competitive with the specialized kernel.

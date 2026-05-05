@@ -23,6 +23,9 @@ test_that("lavaan_fast compiler reproduces unrestricted userGWAS implied covaria
     lavaanrust::lavInspect_rust(fit, "delta"),
     tolerance = 1e-10
   )
+  rust_surfaces <- lavaanrust:::.lavaan_fast_implied_surfaces_rust(compiled)
+  expect_equal(rust_surfaces$implied, lavaanrust::fitted_rust(fit)$cov, tolerance = 1e-10)
+  expect_equal(rust_surfaces$delta, lavaanrust::lavInspect_rust(fit, "delta"), tolerance = 1e-10)
 })
 
 test_that("lavaan_fast compiler preserves fixed-measurement userGWAS structure", {
@@ -48,6 +51,9 @@ test_that("lavaan_fast compiler preserves fixed-measurement userGWAS structure",
     lavaanrust::lavInspect_rust(fit, "delta"),
     tolerance = 1e-10
   )
+  rust_surfaces <- lavaanrust:::.lavaan_fast_implied_surfaces_rust(compiled)
+  expect_equal(rust_surfaces$implied, lavaanrust::fitted_rust(fit)$cov, tolerance = 1e-10)
+  expect_equal(rust_surfaces$delta, lavaanrust::lavInspect_rust(fit, "delta"), tolerance = 1e-10)
   expect_equal(compiled$free_ids, seq_len(6L))
 })
 

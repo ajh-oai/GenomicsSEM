@@ -83,6 +83,7 @@
   }, numeric(1L))
 
   row_kind <- ifelse(par_table$op %in% c("=~", "~"), "A", "S")
+  op_code <- match(par_table$op, c("=~", "~", "~~"))
   edge_key <- paste(row_kind, lhs_index, rhs_index, sep = ":")
   duplicated_edges <- duplicated(edge_key) & row_kind == "A"
   if (any(duplicated_edges)) {
@@ -104,6 +105,7 @@
       variable_names = variable_names,
       par_table = as.data.frame(par_table, stringsAsFactors = FALSE),
       row_kind = row_kind,
+      op_code = op_code,
       lhs_index = lhs_index,
       rhs_index = rhs_index,
       free_ids = free_ids,
@@ -227,4 +229,32 @@
   }
 
   jacobian
+}
+
+.lavaan_fast_implied_surfaces_rust <- function(compiled, free_values = compiled$default_free_values) {
+  surfaces <- evaluate_ram_surfaces(
+    as.integer(compiled$lhs_index),
+    as.integer(compiled$rhs_index),
+    as.integer(compiled$op_code),
+    as.integer(ifelse(is.na(compiled$free_index), 0L, compiled$free_index)),
+    as.double(ifelse(is.na(compiled$fixed_values), 0, compiled$fixed_values)),
+    as.double(free_values),
+    as.integer(match(compiled$observed_names, compiled$variable_names)),
+    as.integer(length(compiled$variable_names))
+  )
+
+  implied <- matrix(
+    surfaces$implied,
+    nrow = length(compiled$observed_names),
+    ncol = length(compiled$observed_names),
+    dimnames = list(compiled$observed_names, compiled$observed_names)
+  )
+  jacobian <- matrix(
+    surfaces$delta,
+    nrow = length(.stat_names(compiled$observed_names)),
+    ncol = length(compiled$free_ids),
+    dimnames = list(.stat_names(compiled$observed_names), .lavaan_fast_free_labels(compiled))
+  )
+
+  list(implied = implied, delta = jacobian)
 }

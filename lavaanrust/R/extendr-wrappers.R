@@ -73,4 +73,19 @@ fit_commonfactor_gwas_q_dwls <- function(sample_cov, wls_v, loadings, gamma, dir
 #' @export
 fit_user_gwas_fixed_measurement_dwls <- function(sample_cov, wls_v, loadings, residuals, psi, gamma, phi, k, max_iter, tol) .Call(wrap__fit_user_gwas_fixed_measurement_dwls, sample_cov, wls_v, loadings, residuals, psi, gamma, phi, k, max_iter, tol)
 
+#' Evaluate generic RAM-model implied covariance and Jacobian surfaces.
+#'
+#' Row indices are 1-based to match R. Operator codes are:
+#' `1 = =~`, `2 = ~`, `3 = ~~`.
+#' @param lhs_index Parameter-table lhs row indices.
+#' @param rhs_index Parameter-table rhs row indices.
+#' @param op_code Parameter-table operator codes.
+#' @param free_index Free-parameter indices, with `0` for fixed rows.
+#' @param fixed_values Fixed row values, ignored for free rows.
+#' @param free_values Current free-parameter values.
+#' @param observed_index Observed-variable indices in the full RAM system.
+#' @param n_variables Number of variables in the full RAM system.
+#' @export
+evaluate_ram_surfaces <- function(lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, n_variables) .Call(wrap__evaluate_ram_surfaces, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, n_variables)
+
 # nolint end

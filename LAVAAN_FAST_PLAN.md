@@ -53,14 +53,15 @@ the compiler seam before moving solvers onto it.
 
 ## Next compiler packets
 
-1. Re-express one current family, probably unrestricted one-factor user-GWAS,
-   through the compiler rather than its bespoke constructor.
-2. Add parser support for a larger syntax subset:
+1. Add a native generic DWLS optimizer over the same RAM IR, so the hot path
+   can reuse generic surfaces without recomputing them after a specialized fit.
+2. Re-express one current family through that native compiler-backed optimizer.
+3. Add parser support for a larger syntax subset:
    - fixed coefficients
    - labels
    - residual covariances
    - direct effects
-3. Add parameter-table equality reuse, then decide whether inequality
+4. Add parameter-table equality reuse, then decide whether inequality
    constraints and `:=` belong in the same generic layer or a later symbolic
    layer.
 

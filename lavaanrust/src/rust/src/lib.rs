@@ -351,6 +351,33 @@ fn from_vech(values: &DVector<f64>, n: usize) -> DMatrix<f64> {
     matrix
 }
 
+fn select_observed(matrix: &DMatrix<f64>, observed_indices: &[usize]) -> DMatrix<f64> {
+    let n_observed = observed_indices.len();
+    let mut selected = DMatrix::<f64>::zeros(n_observed, n_observed);
+
+    for (out_row, source_row) in observed_indices.iter().enumerate() {
+        for (out_col, source_col) in observed_indices.iter().enumerate() {
+            selected[(out_row, out_col)] = matrix[(*source_row, *source_col)];
+        }
+    }
+
+    selected
+}
+
+fn implied_ram(
+    directed: &DMatrix<f64>,
+    covariance: &DMatrix<f64>,
+    observed_indices: &[usize],
+) -> std::result::Result<(DMatrix<f64>, DMatrix<f64>), Error> {
+    let identity = DMatrix::<f64>::identity(directed.nrows(), directed.ncols());
+    let Some(inverse) = (identity - directed).try_inverse() else {
+        return Err(Error::Other("RAM solve failed because I - A is singular".into()));
+    };
+    let full_implied = &inverse * covariance * inverse.transpose();
+
+    Ok((select_observed(&full_implied, observed_indices), inverse))
+}
+
 /// Fit the covariance-only one-factor DWLS slice used by GenomicSEM's
 /// `commonfactor()` model.
 ///
@@ -966,6 +993,156 @@ fn fit_user_gwas_fixed_measurement_dwls(
     ))
 }
 
+/// Evaluate generic RAM-model implied covariance and Jacobian surfaces.
+///
+/// Row indices are 1-based to match R. Operator codes are:
+/// `1 = =~`, `2 = ~`, `3 = ~~`.
+/// @param lhs_index Parameter-table lhs row indices.
+/// @param rhs_index Parameter-table rhs row indices.
+/// @param op_code Parameter-table operator codes.
+/// @param free_index Free-parameter indices, with `0` for fixed rows.
+/// @param fixed_values Fixed row values, ignored for free rows.
+/// @param free_values Current free-parameter values.
+/// @param observed_index Observed-variable indices in the full RAM system.
+/// @param n_variables Number of variables in the full RAM system.
+/// @export
+#[extendr]
+fn evaluate_ram_surfaces(
+    lhs_index: Integers,
+    rhs_index: Integers,
+    op_code: Integers,
+    free_index: Integers,
+    fixed_values: Doubles,
+    free_values: Doubles,
+    observed_index: Integers,
+    n_variables: i32,
+) -> std::result::Result<List, Error> {
+    if n_variables <= 0 {
+        return Err(Error::Other("n_variables must be positive".into()));
+    }
+
+    let n_variables = n_variables as usize;
+    let lhs_index = lhs_index.iter().map(|value| value.0).collect::<Vec<_>>();
+    let rhs_index = rhs_index.iter().map(|value| value.0).collect::<Vec<_>>();
+    let op_code = op_code.iter().map(|value| value.0).collect::<Vec<_>>();
+    let free_index = free_index.iter().map(|value| value.0).collect::<Vec<_>>();
+    let fixed_values = fixed_values.iter().map(|value| value.0).collect::<Vec<_>>();
+    let free_values = free_values.iter().map(|value| value.0).collect::<Vec<_>>();
+    let observed_index = observed_index
+        .iter()
+        .map(|value| value.0)
+        .collect::<Vec<_>>();
+
+    let n_rows = lhs_index.len();
+    if rhs_index.len() != n_rows
+        || op_code.len() != n_rows
+        || free_index.len() != n_rows
+        || fixed_values.len() != n_rows
+    {
+        return Err(Error::Other(
+            "RAM row vectors must all have the same length".into(),
+        ));
+    }
+
+    if observed_index.is_empty() {
+        return Err(Error::Other("observed_index must be non-empty".into()));
+    }
+
+    let observed_indices = observed_index
+        .iter()
+        .map(|index| {
+            if *index <= 0 || *index as usize > n_variables {
+                Err(Error::Other("observed_index is out of bounds".into()))
+            } else {
+                Ok((*index as usize) - 1)
+            }
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+
+    let n_free = free_values.len();
+    let mut directed = DMatrix::<f64>::zeros(n_variables, n_variables);
+    let mut covariance = DMatrix::<f64>::zeros(n_variables, n_variables);
+
+    for row_idx in 0..n_rows {
+        let lhs = lhs_index[row_idx];
+        let rhs = rhs_index[row_idx];
+        if lhs <= 0 || rhs <= 0 || lhs as usize > n_variables || rhs as usize > n_variables {
+            return Err(Error::Other("RAM row index is out of bounds".into()));
+        }
+
+        let lhs = lhs as usize - 1;
+        let rhs = rhs as usize - 1;
+        let free = free_index[row_idx];
+        let value = if free > 0 {
+            let free = free as usize;
+            if free > n_free {
+                return Err(Error::Other("free_index is out of bounds".into()));
+            }
+
+            free_values[free - 1]
+        } else {
+            fixed_values[row_idx]
+        };
+
+        match op_code[row_idx] {
+            1 => directed[(rhs, lhs)] = value,
+            2 => directed[(lhs, rhs)] = value,
+            3 => {
+                covariance[(lhs, rhs)] = value;
+                covariance[(rhs, lhs)] = value;
+            }
+            _ => return Err(Error::Other("unsupported RAM operator code".into())),
+        }
+    }
+
+    let (implied, inverse) = implied_ram(&directed, &covariance, &observed_indices)?;
+    let n_observed = observed_indices.len();
+    let n_stats = n_observed * (n_observed + 1) / 2;
+    let mut delta = DMatrix::<f64>::zeros(n_stats, n_free);
+
+    for free_position in 1..=n_free {
+        let mut d_directed = DMatrix::<f64>::zeros(n_variables, n_variables);
+        let mut d_covariance = DMatrix::<f64>::zeros(n_variables, n_variables);
+
+        for row_idx in 0..n_rows {
+            if free_index[row_idx] != free_position as i32 {
+                continue;
+            }
+
+            let lhs = lhs_index[row_idx] as usize - 1;
+            let rhs = rhs_index[row_idx] as usize - 1;
+
+            match op_code[row_idx] {
+                1 => d_directed[(rhs, lhs)] += 1.0,
+                2 => d_directed[(lhs, rhs)] += 1.0,
+                3 => {
+                    d_covariance[(lhs, rhs)] += 1.0;
+                    if lhs != rhs {
+                        d_covariance[(rhs, lhs)] += 1.0;
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        let d_inverse = &inverse * d_directed * &inverse;
+        let d_full_implied = &d_inverse * &covariance * inverse.transpose()
+            + &inverse * d_covariance * inverse.transpose()
+            + &inverse * &covariance * d_inverse.transpose();
+        let d_implied = select_observed(&d_full_implied, &observed_indices);
+        let d_vech = vech(&d_implied);
+
+        for row_idx in 0..n_stats {
+            delta[(row_idx, free_position - 1)] = d_vech[row_idx];
+        }
+    }
+
+    Ok(list!(
+        implied = to_col_major(&implied),
+        delta = to_col_major(&delta)
+    ))
+}
+
 extendr_module! {
     mod lavaanrust;
     fn fit_one_factor_dwls;
@@ -973,4 +1150,5 @@ extendr_module! {
     fn fit_commonfactor_gwas_dwls;
     fn fit_commonfactor_gwas_q_dwls;
     fn fit_user_gwas_fixed_measurement_dwls;
+    fn evaluate_ram_surfaces;
 }
