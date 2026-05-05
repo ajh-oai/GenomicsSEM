@@ -721,3 +721,59 @@ more time than the native evaluator itself.
 3. After that, revisit `fit_ram_dwls()` with an implied-only line-search path;
    the generic optimizer still pays more overhead than the specialized kernels
    on tiny models.
+
+## 2026-05-04 20:15 PDT
+
+### Cached compile metadata and flat surfaces
+
+- Moved repeated compiler products into the compiled model object:
+  - native free-index and fixed-value vectors
+  - observed-variable indices
+  - free-parameter row groups encoded as offsets plus flattened row indices
+  - free-parameter labels, statistic names, and reusable dimensions
+- Changed the native RAM evaluator and generic DWLS optimizer to consume the
+  precompiled row-group metadata instead of rebuilding free-row groupings on
+  each call.
+- Added `.lavaan_fast_implied_surfaces_rust_flat()` as the internal raw-array
+  path; the public helper now only adds named R matrices at the boundary.
+- Added regression coverage for the cached compiler fields and for agreement
+  between the flat and wrapped surface APIs.
+
+### Validation
+
+- Local package validation:
+  - `R CMD INSTALL lavaanrust`
+  - `Rscript -e 'testthat::test_dir("lavaanrust/tests/testthat")'`
+  - result: `64` passing tests
+
+### Benchmarks
+
+Tiny unrestricted `userGWAS` fixture, 10,000 evaluator calls, local Apple
+Silicon run, median of seven repetitions:
+
+| Path | Before this packet | After this packet | Speedup |
+| --- | ---: | ---: | ---: |
+| Named public wrapper | `0.810 s` | `0.141 s` | `5.74x` |
+| Internal flat native path | n/a | `0.079 s` | n/a |
+
+Relative to the original generic R evaluator checkpoint from `18:50 PDT`, the
+current named wrapper is now `16.13x` faster (`2.274 s -> 0.141 s`) while still
+returning the same named matrices.
+
+`Rprof` after the change shows the next small-model overhead clearly:
+
+- wrapped path:
+  - native evaluator: `51.30%` self time
+  - R `matrix()` reconstruction: `28.10%`
+  - list element access: `13.37%`
+- flat path:
+  - native evaluator: `76.54%` self time
+  - list element access: `16.36%`
+
+### Next packet
+
+1. Revisit `fit_ram_dwls()` with an implied-only line-search path so candidate
+   steps stop paying for Jacobians they do not use.
+2. If repeated surface calls remain important after that, consider a reusable
+   native compiled plan or external pointer before trying to shave the public
+   matrix-wrapping boundary further.

@@ -97,6 +97,16 @@
     dimnames = list(observed_names, variable_names)
   )
   selector[cbind(seq_along(observed_names), match(observed_names, variable_names))] <- 1
+  free_row_groups <- lapply(seq_along(free_ids), function(free_position) {
+    which(free_index == free_position)
+  })
+  free_row_offsets <- c(0L, cumsum(lengths(free_row_groups)))
+  free_row_indices <- as.integer(unlist(free_row_groups, use.names = FALSE))
+  free_labels <- vapply(seq_along(free_ids), function(free_position) {
+    row_idx <- free_row_groups[[free_position]][[1L]]
+    paste0(par_table$lhs[[row_idx]], par_table$op[[row_idx]], par_table$rhs[[row_idx]])
+  }, character(1L))
+  stat_names <- .stat_names(observed_names)
 
   structure(
     list(
@@ -110,9 +120,20 @@
       rhs_index = rhs_index,
       free_ids = free_ids,
       free_index = free_index,
+      native_free_index = as.integer(ifelse(is.na(free_index), 0L, free_index)),
       fixed_values = fixed_values,
+      native_fixed_values = as.double(ifelse(is.na(fixed_values), 0, fixed_values)),
       default_free_values = default_free_values,
-      selector = selector
+      selector = selector,
+      observed_index = as.integer(match(observed_names, variable_names)),
+      free_row_offsets = as.integer(free_row_offsets),
+      free_row_indices = free_row_indices,
+      free_labels = free_labels,
+      stat_names = stat_names,
+      n_variables = length(variable_names),
+      n_observed = length(observed_names),
+      n_stats = length(stat_names),
+      n_free = length(free_ids)
     ),
     class = "lavaan_fast_compiled"
   )
@@ -161,14 +182,7 @@
 }
 
 .lavaan_fast_free_labels <- function(compiled) {
-  vapply(compiled$free_ids, function(free_id) {
-    row_idx <- which(compiled$par_table$free == free_id)[[1L]]
-    paste0(
-      compiled$par_table$lhs[[row_idx]],
-      compiled$par_table$op[[row_idx]],
-      compiled$par_table$rhs[[row_idx]]
-    )
-  }, character(1L))
+  compiled$free_labels
 }
 
 .lavaan_fast_derivative_matrices <- function(compiled, free_position) {
@@ -213,7 +227,7 @@
     0,
     nrow = n_observed * (n_observed + 1L) / 2L,
     ncol = length(compiled$free_ids),
-    dimnames = list(.stat_names(compiled$observed_names), .lavaan_fast_free_labels(compiled))
+    dimnames = list(compiled$stat_names, compiled$free_labels)
   )
 
   for (free_position in seq_along(compiled$free_ids)) {
@@ -231,29 +245,35 @@
   jacobian
 }
 
-.lavaan_fast_implied_surfaces_rust <- function(compiled, free_values = compiled$default_free_values) {
-  surfaces <- evaluate_ram_surfaces(
+.lavaan_fast_implied_surfaces_rust_flat <- function(compiled, free_values = compiled$default_free_values) {
+  evaluate_ram_surfaces(
     as.integer(compiled$lhs_index),
     as.integer(compiled$rhs_index),
     as.integer(compiled$op_code),
-    as.integer(ifelse(is.na(compiled$free_index), 0L, compiled$free_index)),
-    as.double(ifelse(is.na(compiled$fixed_values), 0, compiled$fixed_values)),
+    compiled$native_free_index,
+    compiled$native_fixed_values,
     as.double(free_values),
-    as.integer(match(compiled$observed_names, compiled$variable_names)),
-    as.integer(length(compiled$variable_names))
+    compiled$observed_index,
+    compiled$free_row_offsets,
+    compiled$free_row_indices,
+    as.integer(compiled$n_variables)
   )
+}
+
+.lavaan_fast_implied_surfaces_rust <- function(compiled, free_values = compiled$default_free_values) {
+  surfaces <- .lavaan_fast_implied_surfaces_rust_flat(compiled, free_values)
 
   implied <- matrix(
     surfaces$implied,
-    nrow = length(compiled$observed_names),
-    ncol = length(compiled$observed_names),
+    nrow = compiled$n_observed,
+    ncol = compiled$n_observed,
     dimnames = list(compiled$observed_names, compiled$observed_names)
   )
   jacobian <- matrix(
     surfaces$delta,
-    nrow = length(.stat_names(compiled$observed_names)),
-    ncol = length(compiled$free_ids),
-    dimnames = list(.stat_names(compiled$observed_names), .lavaan_fast_free_labels(compiled))
+    nrow = compiled$n_stats,
+    ncol = compiled$n_free,
+    dimnames = list(compiled$stat_names, compiled$free_labels)
   )
 
   list(implied = implied, delta = jacobian)
@@ -266,11 +286,13 @@
     as.integer(compiled$lhs_index),
     as.integer(compiled$rhs_index),
     as.integer(compiled$op_code),
-    as.integer(ifelse(is.na(compiled$free_index), 0L, compiled$free_index)),
-    as.double(ifelse(is.na(compiled$fixed_values), 0, compiled$fixed_values)),
+    compiled$native_free_index,
+    compiled$native_fixed_values,
     as.double(compiled$default_free_values),
-    as.integer(match(compiled$observed_names, compiled$variable_names)),
-    as.integer(length(compiled$variable_names)),
+    compiled$observed_index,
+    compiled$free_row_offsets,
+    compiled$free_row_indices,
+    as.integer(compiled$n_variables),
     as.integer(max_iter),
     tol
   )
@@ -283,9 +305,9 @@
   )
   fit$delta <- matrix(
     fit$delta,
-    nrow = length(.stat_names(compiled$observed_names)),
-    ncol = length(compiled$free_ids),
-    dimnames = list(.stat_names(compiled$observed_names), .lavaan_fast_free_labels(compiled))
+    nrow = compiled$n_stats,
+    ncol = compiled$n_free,
+    dimnames = list(compiled$stat_names, compiled$free_labels)
   )
 
   fit

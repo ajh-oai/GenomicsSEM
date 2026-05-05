@@ -433,6 +433,52 @@ fn validate_ram_indices(
         .collect::<std::result::Result<Vec<_>, _>>()
 }
 
+fn validate_free_row_groups(
+    free_row_offsets: &[i32],
+    free_row_indices: &[i32],
+    free_index: &[i32],
+    n_free: usize,
+) -> std::result::Result<(), Error> {
+    if free_row_offsets.len() != n_free + 1 {
+        return Err(Error::Other(
+            "free_row_offsets must have length n_free + 1".into(),
+        ));
+    }
+
+    if free_row_offsets.first().copied() != Some(0)
+        || free_row_offsets.last().copied() != Some(free_row_indices.len() as i32)
+    {
+        return Err(Error::Other(
+            "free_row_offsets must span free_row_indices".into(),
+        ));
+    }
+
+    for window in free_row_offsets.windows(2) {
+        if window[0] > window[1] {
+            return Err(Error::Other(
+                "free_row_offsets must be non-decreasing".into(),
+            ));
+        }
+    }
+
+    for (free_position, window) in free_row_offsets.windows(2).enumerate() {
+        for flat_idx in window[0] as usize..window[1] as usize {
+            let row_idx = free_row_indices[flat_idx];
+            if row_idx <= 0 || row_idx as usize > free_index.len() {
+                return Err(Error::Other("free_row_indices is out of bounds".into()));
+            }
+
+            if free_index[row_idx as usize - 1] != free_position as i32 + 1 {
+                return Err(Error::Other(
+                    "free_row_indices does not match free_index".into(),
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn ram_matrices_from_rows(
     lhs_index: &[i32],
     rhs_index: &[i32],
@@ -473,7 +519,8 @@ fn ram_delta_from_rows(
     lhs_index: &[i32],
     rhs_index: &[i32],
     op_code: &[i32],
-    free_index: &[i32],
+    free_row_offsets: &[i32],
+    free_row_indices: &[i32],
     full_implied: &DMatrix<f64>,
     inverse: &DMatrix<f64>,
     observed_indices: &[usize],
@@ -482,15 +529,10 @@ fn ram_delta_from_rows(
     let n_observed = observed_indices.len();
     let n_stats = n_observed * (n_observed + 1) / 2;
     let mut delta = DMatrix::<f64>::zeros(n_stats, n_free);
-    let mut free_rows = vec![Vec::<usize>::new(); n_free];
 
-    for (row_idx, free_position) in free_index.iter().enumerate() {
-        if *free_position > 0 {
-            free_rows[*free_position as usize - 1].push(row_idx);
-        }
-    }
-
-    for (free_position, rows) in free_rows.iter().enumerate() {
+    for free_position in 0..n_free {
+        let start = free_row_offsets[free_position] as usize;
+        let end = free_row_offsets[free_position + 1] as usize;
         let mut stat_row = 0;
 
         for observed_col in 0..n_observed {
@@ -500,11 +542,12 @@ fn ram_delta_from_rows(
                 let source_row = observed_indices[observed_row];
                 let mut derivative = 0.0;
 
-                for row_idx in rows {
-                    let lhs = lhs_index[*row_idx] as usize - 1;
-                    let rhs = rhs_index[*row_idx] as usize - 1;
+                for flat_idx in start..end {
+                    let row_idx = free_row_indices[flat_idx] as usize - 1;
+                    let lhs = lhs_index[row_idx] as usize - 1;
+                    let rhs = rhs_index[row_idx] as usize - 1;
 
-                    match op_code[*row_idx] {
+                    match op_code[row_idx] {
                         1 => {
                             derivative += inverse[(source_row, rhs)] * full_implied[(lhs, source_col)]
                                 + full_implied[(lhs, source_row)] * inverse[(source_col, rhs)];
@@ -541,6 +584,8 @@ fn ram_surfaces_from_rows(
     fixed_values: &[f64],
     free_values: &[f64],
     observed_indices: &[usize],
+    free_row_offsets: &[i32],
+    free_row_indices: &[i32],
     n_variables: usize,
 ) -> std::result::Result<(DMatrix<f64>, DMatrix<f64>), Error> {
     let (directed, covariance) = ram_matrices_from_rows(
@@ -557,7 +602,8 @@ fn ram_surfaces_from_rows(
         lhs_index,
         rhs_index,
         op_code,
-        free_index,
+        free_row_offsets,
+        free_row_indices,
         &full_implied,
         &inverse,
         observed_indices,
@@ -1212,6 +1258,8 @@ fn fit_user_gwas_fixed_measurement_dwls(
 /// @param fixed_values Fixed row values, ignored for free rows.
 /// @param free_values Current free-parameter values.
 /// @param observed_index Observed-variable indices in the full RAM system.
+/// @param free_row_offsets Offsets into `free_row_indices` for each free parameter.
+/// @param free_row_indices Flattened 1-based row indices grouped by free parameter.
 /// @param n_variables Number of variables in the full RAM system.
 /// @export
 #[extendr]
@@ -1223,6 +1271,8 @@ fn evaluate_ram_surfaces(
     fixed_values: Doubles,
     free_values: Doubles,
     observed_index: Integers,
+    free_row_offsets: Integers,
+    free_row_indices: Integers,
     n_variables: i32,
 ) -> std::result::Result<List, Error> {
     if n_variables <= 0 {
@@ -1240,6 +1290,14 @@ fn evaluate_ram_surfaces(
         .iter()
         .map(|value| value.0)
         .collect::<Vec<_>>();
+    let free_row_offsets = free_row_offsets
+        .iter()
+        .map(|value| value.0)
+        .collect::<Vec<_>>();
+    let free_row_indices = free_row_indices
+        .iter()
+        .map(|value| value.0)
+        .collect::<Vec<_>>();
 
     let observed_indices = validate_ram_indices(
         &lhs_index,
@@ -1251,6 +1309,12 @@ fn evaluate_ram_surfaces(
         n_variables,
         free_values.len(),
     )?;
+    validate_free_row_groups(
+        &free_row_offsets,
+        &free_row_indices,
+        &free_index,
+        free_values.len(),
+    )?;
     let (implied, delta) = ram_surfaces_from_rows(
         &lhs_index,
         &rhs_index,
@@ -1259,6 +1323,8 @@ fn evaluate_ram_surfaces(
         &fixed_values,
         &free_values,
         &observed_indices,
+        &free_row_offsets,
+        &free_row_indices,
         n_variables,
     )?;
 
@@ -1281,6 +1347,8 @@ fn evaluate_ram_surfaces(
 /// @param fixed_values Fixed row values, ignored for free rows.
 /// @param free_values Initial free-parameter values.
 /// @param observed_index Observed-variable indices in the full RAM system.
+/// @param free_row_offsets Offsets into `free_row_indices` for each free parameter.
+/// @param free_row_indices Flattened 1-based row indices grouped by free parameter.
 /// @param n_variables Number of variables in the full RAM system.
 /// @param max_iter Maximum optimizer iterations.
 /// @param tol Convergence tolerance.
@@ -1296,6 +1364,8 @@ fn fit_ram_dwls(
     fixed_values: Doubles,
     free_values: Doubles,
     observed_index: Integers,
+    free_row_offsets: Integers,
+    free_row_indices: Integers,
     n_variables: i32,
     max_iter: i32,
     tol: f64,
@@ -1315,6 +1385,14 @@ fn fit_ram_dwls(
         .iter()
         .map(|value| value.0)
         .collect::<Vec<_>>();
+    let free_row_offsets = free_row_offsets
+        .iter()
+        .map(|value| value.0)
+        .collect::<Vec<_>>();
+    let free_row_indices = free_row_indices
+        .iter()
+        .map(|value| value.0)
+        .collect::<Vec<_>>();
     let observed_indices = validate_ram_indices(
         &lhs_index,
         &rhs_index,
@@ -1323,6 +1401,12 @@ fn fit_ram_dwls(
         &fixed_values,
         &observed_index,
         n_variables,
+        initial_free_values.len(),
+    )?;
+    validate_free_row_groups(
+        &free_row_offsets,
+        &free_row_indices,
+        &free_index,
         initial_free_values.len(),
     )?;
 
@@ -1365,6 +1449,8 @@ fn fit_ram_dwls(
             &fixed_values,
             params_vec,
             &observed_indices,
+            &free_row_offsets,
+            &free_row_indices,
             n_variables,
         )?;
         let residual = &observed - vech(&implied);
@@ -1398,6 +1484,8 @@ fn fit_ram_dwls(
             &fixed_values,
             next_params.as_slice(),
             &observed_indices,
+            &free_row_offsets,
+            &free_row_indices,
             n_variables,
         )?;
         let next_residual = &observed - vech(&next_implied);
@@ -1424,6 +1512,8 @@ fn fit_ram_dwls(
         &fixed_values,
         params.as_slice(),
         &observed_indices,
+        &free_row_offsets,
+        &free_row_indices,
         n_variables,
     )?;
     let residual = &observed - vech(&implied);

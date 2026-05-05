@@ -84,9 +84,11 @@ fit_user_gwas_fixed_measurement_dwls <- function(sample_cov, wls_v, loadings, re
 #' @param fixed_values Fixed row values, ignored for free rows.
 #' @param free_values Current free-parameter values.
 #' @param observed_index Observed-variable indices in the full RAM system.
+#' @param free_row_offsets Offsets into `free_row_indices` for each free parameter.
+#' @param free_row_indices Flattened 1-based row indices grouped by free parameter.
 #' @param n_variables Number of variables in the full RAM system.
 #' @export
-evaluate_ram_surfaces <- function(lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, n_variables) .Call(wrap__evaluate_ram_surfaces, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, n_variables)
+evaluate_ram_surfaces <- function(lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, free_row_offsets, free_row_indices, n_variables) .Call(wrap__evaluate_ram_surfaces, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, free_row_offsets, free_row_indices, n_variables)
 
 #' Fit a generic RAM-model DWLS slice from compiled row data.
 #'
@@ -101,10 +103,12 @@ evaluate_ram_surfaces <- function(lhs_index, rhs_index, op_code, free_index, fix
 #' @param fixed_values Fixed row values, ignored for free rows.
 #' @param free_values Initial free-parameter values.
 #' @param observed_index Observed-variable indices in the full RAM system.
+#' @param free_row_offsets Offsets into `free_row_indices` for each free parameter.
+#' @param free_row_indices Flattened 1-based row indices grouped by free parameter.
 #' @param n_variables Number of variables in the full RAM system.
 #' @param max_iter Maximum optimizer iterations.
 #' @param tol Convergence tolerance.
 #' @export
-fit_ram_dwls <- function(sample_cov, wls_v, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, n_variables, max_iter, tol) .Call(wrap__fit_ram_dwls, sample_cov, wls_v, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, n_variables, max_iter, tol)
+fit_ram_dwls <- function(sample_cov, wls_v, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, free_row_offsets, free_row_indices, n_variables, max_iter, tol) .Call(wrap__fit_ram_dwls, sample_cov, wls_v, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, free_row_offsets, free_row_indices, n_variables, max_iter, tol)
 
 # nolint end

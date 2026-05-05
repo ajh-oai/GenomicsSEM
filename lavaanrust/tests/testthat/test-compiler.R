@@ -13,6 +13,18 @@ test_that("lavaan_fast compiler reproduces unrestricted userGWAS implied covaria
 
   expect_s3_class(compiled, "lavaan_fast_compiled")
   expect_equal(compiled$variable_names, c("SNP", "A", "B", "C", "F1"))
+  expect_equal(compiled$free_labels, lavaanrust:::.lavaan_fast_free_labels(compiled))
+  expect_equal(compiled$stat_names, lavaanrust:::.stat_names(compiled$observed_names))
+  free_row_counts <- lengths(lapply(seq_along(compiled$free_ids), function(free_position) {
+    which(compiled$free_index == free_position)
+  }))
+  expect_equal(compiled$free_row_offsets, c(0L, cumsum(free_row_counts)))
+  expect_equal(
+    compiled$free_row_indices,
+    as.integer(unlist(lapply(seq_along(compiled$free_ids), function(free_position) {
+      which(compiled$free_index == free_position)
+    }), use.names = FALSE))
+  )
   expect_equal(
     lavaanrust:::.lavaan_fast_implied_covariance(compiled),
     lavaanrust::fitted_rust(fit)$cov,
@@ -24,8 +36,19 @@ test_that("lavaan_fast compiler reproduces unrestricted userGWAS implied covaria
     tolerance = 1e-10
   )
   rust_surfaces <- lavaanrust:::.lavaan_fast_implied_surfaces_rust(compiled)
+  rust_surfaces_flat <- lavaanrust:::.lavaan_fast_implied_surfaces_rust_flat(compiled)
   expect_equal(rust_surfaces$implied, lavaanrust::fitted_rust(fit)$cov, tolerance = 1e-10)
   expect_equal(rust_surfaces$delta, lavaanrust::lavInspect_rust(fit, "delta"), tolerance = 1e-10)
+  expect_equal(
+    matrix(rust_surfaces_flat$implied, nrow = compiled$n_observed),
+    unname(rust_surfaces$implied),
+    tolerance = 1e-10
+  )
+  expect_equal(
+    matrix(rust_surfaces_flat$delta, nrow = compiled$n_stats),
+    unname(rust_surfaces$delta),
+    tolerance = 1e-10
+  )
 })
 
 test_that("lavaan_fast compiler preserves fixed-measurement userGWAS structure", {
