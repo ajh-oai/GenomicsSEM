@@ -627,3 +627,34 @@ Selected comparisons:
 2. Use the generic optimizer there first, where the comparison is against
    unsupported behavior rather than against an already-optimal specialized
    kernel.
+
+## 2026-05-04 18:58 PDT
+
+### Generic parameter-table fallback
+
+- Added a generic compiler-backed `sem_rust()` path for parameter-table models
+  with free directed structure that do not match one of the existing specialized
+  kernels.
+- Added matching `lavaan_rust()` reuse support for the new
+  `ram_dwls_generic` model kind.
+- Tightened the fixed-measurement user-GWAS recognizer so extra rows no longer
+  get silently accepted by the narrow specialized slice.
+
+### Validation
+
+- Added a parameter-table fixture with an extra free direct SNP effect
+  (`A ~ SNP`) that routes through the new generic path and supports base-model
+  reuse.
+- Local package validation:
+  - `R CMD INSTALL lavaanrust`
+  - `Rscript -e 'testthat::test_dir("lavaanrust/tests/testthat")'`
+  - result: `57` passing tests
+
+### Significance
+
+- `lavaan_fast` is no longer only a compiler experiment; it can now execute
+  genuinely broader parameter-table models natively without adding a new
+  handwritten solver family.
+- The next limiting step for end-to-end broader `userGWAS_rust()` support is not
+  the compiled parameter-table layer anymore. It is the front-end parser/model
+  construction step for richer model strings before those tables exist.

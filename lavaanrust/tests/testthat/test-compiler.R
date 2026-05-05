@@ -103,3 +103,50 @@ test_that("lavaan_fast generic DWLS optimizer reproduces fixed-measurement userG
   expect_equal(generic$implied, lavaanrust::fitted_rust(specialized)$cov, tolerance = 1e-8)
   expect_equal(generic$delta, lavaanrust::lavInspect_rust(specialized, "delta"), tolerance = 1e-8)
 })
+
+test_that("lavaan_fast generic parameter-table path supports direct SNP effect", {
+  fixture <- user_gwas_fixture()
+  par_table <- fixture$fixed_model
+  free_rows <- which(par_table$free > 0L)
+  par_table$free[] <- 0L
+  par_table$free[free_rows] <- seq_along(free_rows)
+  extra <- transform(
+    par_table[1L, , drop = FALSE],
+    id = max(par_table$id) + 1L,
+    lhs = "A",
+    op = "~",
+    rhs = "SNP",
+    user = 1L,
+    free = max(par_table$free) + 1L,
+    ustart = NA_real_,
+    plabel = paste0(".p", max(par_table$id) + 1L, "."),
+    start = 0.02,
+    est = 0.02,
+    se = 0
+  )
+  par_table <- rbind(par_table, extra)
+  compiled <- lavaanrust:::.lavaan_fast_compile_par_table(
+    par_table,
+    colnames(fixture$sample_cov)
+  )
+  sample_cov <- lavaanrust:::.lavaan_fast_implied_covariance(compiled)
+  fit <- lavaanrust::sem_rust(
+    par_table,
+    sample.cov = sample_cov,
+    estimator = "DWLS",
+    WLS.V = fixture$wls_v
+  )
+  refit <- lavaanrust::lavaan_rust(
+    sample.cov = sample_cov,
+    WLS.V = fixture$wls_v,
+    slotOptions = fit@Options,
+    slotParTable = fit@ParTable,
+    slotData = fit@Data,
+    slotModel = fit@Model
+  )
+
+  expect_equal(fit@Model$model_kind, "ram_dwls_generic")
+  expect_equal(lavaanrust::fitted_rust(fit)$cov, sample_cov, tolerance = 1e-8)
+  expect_equal(lavaanrust::parTable_rust(fit)$est, par_table$est, tolerance = 1e-8)
+  expect_equal(lavaanrust::fitted_rust(refit)$cov, sample_cov, tolerance = 1e-8)
+})

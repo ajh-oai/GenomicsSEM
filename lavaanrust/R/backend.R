@@ -1156,10 +1156,12 @@
       par_table$lhs %in% traits &
       par_table$rhs == predictor
   )
+  expected_rows <- unname(sort(c(loading_rows, residual_rows, psi_row, factor_regression, phi_row)))
 
   if (
     length(phi_row) != 1L ||
       length(direct_rows) > 0L ||
+      !identical(expected_rows, seq_len(nrow(par_table))) ||
       any(par_table$free[loading_rows] != 0L) ||
       any(par_table$free[c(residual_rows, psi_row, factor_regression, phi_row)] <= 0L)
   ) {
@@ -1254,6 +1256,63 @@
   )
 
   .new_user_gwas_fixed_measurement_fit(par_table, sample.cov, WLS.V, spec, fit)
+}
+
+.new_lavaan_fast_ram_fit <- function(par_table, sample.cov, WLS.V, compiled, fit) {
+  par_table <- as.data.frame(par_table, stringsAsFactors = FALSE)
+  rownames(par_table) <- NULL
+  free_rows <- which(!is.na(compiled$free_index))
+  par_table$est[free_rows] <- fit$estimates[compiled$free_index[free_rows]]
+  par_table$se[] <- 0
+  par_table$se[free_rows] <- fit$naive_se[compiled$free_index[free_rows]]
+  npar <- length(compiled$free_ids)
+  fit_stats <- c(
+    npar = npar,
+    fmin = fit$objective,
+    chisq = 2 * fit$objective,
+    df = length(.stat_names(compiled$observed_names)) - npar,
+    srmr = fit$srmr
+  )
+  cor_lv <- if (length(compiled$latent_names)) {
+    latent_cor <- diag(1, nrow = length(compiled$latent_names), ncol = length(compiled$latent_names))
+    dimnames(latent_cor) <- list(compiled$latent_names, compiled$latent_names)
+    latent_cor
+  } else {
+    matrix(numeric(), nrow = 0L, ncol = 0L)
+  }
+
+  methods::new(
+    "lavaan_rust_fit",
+    ParTable = par_table,
+    observed = sample.cov,
+    implied = list(cov = fit$implied),
+    delta = fit$delta,
+    WLS.V = WLS.V,
+    fit = fit_stats,
+    cor.lv = cor_lv,
+    se = list(theta = matrix(0, nrow = nrow(sample.cov), ncol = ncol(sample.cov))),
+    converged = isTRUE(fit$converged),
+    observed_names = compiled$observed_names,
+    latent_name = if (length(compiled$latent_names)) compiled$latent_names[[1L]] else "",
+    model_kind = "ram_dwls_generic",
+    Options = list(estimator = "DWLS"),
+    Data = list(observed_names = compiled$observed_names),
+    Model = list(model_kind = "ram_dwls_generic", par_table = par_table)
+  )
+}
+
+.fit_lavaan_fast_ram_model <- function(par_table, sample.cov, WLS.V) {
+  observed_names <- colnames(sample.cov)
+  if (is.null(observed_names)) {
+    observed_names <- rownames(sample.cov)
+  }
+  if (is.null(observed_names)) {
+    stop("lavaan_fast RAM models require named observed variables.", call. = FALSE)
+  }
+
+  compiled <- .lavaan_fast_compile_par_table(par_table, observed_names)
+  fit <- .lavaan_fast_fit_dwls_rust(compiled, sample.cov, WLS.V)
+  .new_lavaan_fast_ram_fit(par_table, sample.cov, WLS.V, compiled, fit)
 }
 
 #' Rust-backed experimental replacement for the supported `lavaan::sem()` slice.
@@ -1362,6 +1421,10 @@ sem_rust <- function(model, sample.cov, estimator = "ML", WLS.V = NULL, ...) {
       return(.fit_commonfactor_gwas_q_model(model, sample.cov, WLS.V, q_spec))
     }
 
+    if (any(model$op %in% c("=~", "~") & model$free > 0L)) {
+      return(.fit_lavaan_fast_ram_model(model, sample.cov, WLS.V))
+    }
+
     return(.fit_observed_covariance_model(
       model,
       sample.cov,
@@ -1418,6 +1481,16 @@ lavaan_rust <- function(sample.cov, WLS.V = NULL, slotOptions = NULL, slotParTab
     if (!is.null(spec)) {
       return(.fit_user_gwas_fixed_measurement_model(slotModel$par_table, sample.cov, WLS.V, spec))
     }
+  }
+
+  if (
+    is.list(slotModel) &&
+      identical(slotModel$model_kind, "ram_dwls_generic") &&
+      is.data.frame(slotModel$par_table) &&
+      is.matrix(sample.cov) &&
+      is.matrix(WLS.V)
+  ) {
+    return(.fit_lavaan_fast_ram_model(slotModel$par_table, sample.cov, WLS.V))
   }
 
   stop(
