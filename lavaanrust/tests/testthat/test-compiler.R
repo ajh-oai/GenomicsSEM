@@ -150,3 +150,53 @@ test_that("lavaan_fast generic parameter-table path supports direct SNP effect",
   expect_equal(lavaanrust::parTable_rust(fit)$est, par_table$est, tolerance = 1e-8)
   expect_equal(lavaanrust::fitted_rust(refit)$cov, sample_cov, tolerance = 1e-8)
 })
+
+test_that("lavaan_fast native Jacobian sums shared directed-edge parameters", {
+  fixture <- user_gwas_fixture()
+  par_table <- fixture$fixed_model
+  free_rows <- which(par_table$free > 0L)
+  par_table$free[] <- 0L
+  par_table$free[free_rows] <- seq_along(free_rows)
+  shared_free <- max(par_table$free) + 1L
+  direct_rows <- rbind(
+    transform(
+      par_table[1L, , drop = FALSE],
+      id = max(par_table$id) + 1L,
+      lhs = "A",
+      op = "~",
+      rhs = "SNP",
+      user = 1L,
+      free = shared_free,
+      ustart = NA_real_,
+      plabel = paste0(".p", max(par_table$id) + 1L, "."),
+      start = 0.02,
+      est = 0.02,
+      se = 0
+    ),
+    transform(
+      par_table[1L, , drop = FALSE],
+      id = max(par_table$id) + 2L,
+      lhs = "B",
+      op = "~",
+      rhs = "SNP",
+      user = 1L,
+      free = shared_free,
+      ustart = NA_real_,
+      plabel = paste0(".p", max(par_table$id) + 2L, "."),
+      start = 0.02,
+      est = 0.02,
+      se = 0
+    )
+  )
+  compiled <- lavaanrust:::.lavaan_fast_compile_par_table(
+    rbind(par_table, direct_rows),
+    colnames(fixture$sample_cov)
+  )
+  rust_surfaces <- lavaanrust:::.lavaan_fast_implied_surfaces_rust(compiled)
+
+  expect_equal(
+    rust_surfaces$delta,
+    lavaanrust:::.lavaan_fast_implied_jacobian(compiled),
+    tolerance = 1e-10
+  )
+})

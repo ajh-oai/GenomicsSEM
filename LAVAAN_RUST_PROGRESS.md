@@ -658,3 +658,66 @@ Selected comparisons:
 - The next limiting step for end-to-end broader `userGWAS_rust()` support is not
   the compiled parameter-table layer anymore. It is the front-end parser/model
   construction step for richer model strings before those tables exist.
+
+## 2026-05-04 19:12 PDT
+
+### Rank-1 Jacobian optimization
+
+- Replaced the dense generic Jacobian path with algebraically equivalent
+  outer-product updates:
+  - directed-path derivatives now use columns of `B = (I - A)^-1` and rows of
+    the full implied covariance
+  - covariance derivatives now use outer products of columns of `B`
+- Preserved equality-reuse semantics by summing contributions from every row
+  sharing a free-parameter id.
+- Added an explicit regression test where one free parameter controls two
+  distinct directed edges.
+
+### Validation
+
+- Local package validation:
+  - `R CMD INSTALL lavaanrust`
+  - `Rscript -e 'testthat::test_dir("lavaanrust/tests/testthat")'`
+  - result: `58` passing tests
+
+### Benchmarks
+
+Raw native evaluator, same synthetic RAM shapes before vs after:
+
+| Observed vars | Free params | Dense Jacobian | Rank-1 Jacobian | Speedup |
+| ---: | ---: | ---: | ---: | ---: |
+| 4 | 10 | `9.70 us` | `3.30 us` | `2.94x` |
+| 8 | 18 | `36.90 us` | `6.20 us` | `5.95x` |
+| 16 | 34 | `167.67 us` | `24.00 us` | `6.99x` |
+| 32 | 66 | `1330.00 us` | `132.00 us` | `10.08x` |
+
+At fixed `8` observed variables, scaling across free-parameter counts also
+improved materially:
+
+| Free params | Dense Jacobian | Rank-1 Jacobian | Speedup |
+| ---: | ---: | ---: | ---: |
+| 17 | `35.20 us` | `6.07 us` | `5.80x` |
+| 25 | `50.17 us` | `7.08 us` | `7.09x` |
+| 41 | `79.00 us` | `9.12 us` | `8.66x` |
+| 73 | `139.50 us` | `13.25 us` | `10.53x` |
+
+The public R wrapper path improved more modestly on the tiny user-GWAS fixture:
+
+- before: `1.004 s` for 10,000 calls
+- after: `0.810 s` for 10,000 calls
+
+`Rprof` now shows that small-model wrapper overhead is the next clear target:
+matrix reconstruction, stat-name generation, and free-label generation consume
+more time than the native evaluator itself.
+
+### Next packet
+
+1. Move more compile products into the compiled object:
+   - free labels
+   - stat names
+   - native row groups / edge metadata
+2. Add an internal flat-array path for repeated native use and wrap named R
+   matrices only at the public boundary.
+3. After that, revisit `fit_ram_dwls()` with an implied-only line-search path;
+   the generic optimizer still pays more overhead than the specialized kernels
+   on tiny models.

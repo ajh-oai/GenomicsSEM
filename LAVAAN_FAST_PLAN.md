@@ -57,12 +57,16 @@ the compiler seam before moving solvers onto it.
    that do not yet have a specialized kernel.
 2. Keep the existing specialized kernels for hot paths where they are materially
    faster than the generic solver.
-3. Add parser support for a larger syntax subset:
+3. Make the generic evaluator cheaper to reuse repeatedly:
+   - cache compile products such as free labels and stat names
+   - move native edge metadata into a reusable compiled plan
+   - avoid rebuilding named R matrices inside hot internal loops
+4. Add parser support for a larger syntax subset:
    - fixed coefficients
    - labels
    - residual covariances
    - direct effects
-4. Add parameter-table equality reuse, then decide whether inequality
+5. Add parameter-table equality reuse, then decide whether inequality
    constraints and `:=` belong in the same generic layer or a later symbolic
    layer.
 

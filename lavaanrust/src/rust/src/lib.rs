@@ -368,14 +368,15 @@ fn implied_ram(
     directed: &DMatrix<f64>,
     covariance: &DMatrix<f64>,
     observed_indices: &[usize],
-) -> std::result::Result<(DMatrix<f64>, DMatrix<f64>), Error> {
+) -> std::result::Result<(DMatrix<f64>, DMatrix<f64>, DMatrix<f64>), Error> {
     let identity = DMatrix::<f64>::identity(directed.nrows(), directed.ncols());
     let Some(inverse) = (identity - directed).try_inverse() else {
         return Err(Error::Other("RAM solve failed because I - A is singular".into()));
     };
     let full_implied = &inverse * covariance * inverse.transpose();
+    let implied = select_observed(&full_implied, observed_indices);
 
-    Ok((select_observed(&full_implied, observed_indices), inverse))
+    Ok((implied, full_implied, inverse))
 }
 
 fn validate_ram_indices(
@@ -473,50 +474,59 @@ fn ram_delta_from_rows(
     rhs_index: &[i32],
     op_code: &[i32],
     free_index: &[i32],
-    covariance: &DMatrix<f64>,
+    full_implied: &DMatrix<f64>,
     inverse: &DMatrix<f64>,
     observed_indices: &[usize],
-    n_variables: usize,
     n_free: usize,
 ) -> DMatrix<f64> {
     let n_observed = observed_indices.len();
     let n_stats = n_observed * (n_observed + 1) / 2;
     let mut delta = DMatrix::<f64>::zeros(n_stats, n_free);
+    let mut free_rows = vec![Vec::<usize>::new(); n_free];
 
-    for free_position in 1..=n_free {
-        let mut d_directed = DMatrix::<f64>::zeros(n_variables, n_variables);
-        let mut d_covariance = DMatrix::<f64>::zeros(n_variables, n_variables);
+    for (row_idx, free_position) in free_index.iter().enumerate() {
+        if *free_position > 0 {
+            free_rows[*free_position as usize - 1].push(row_idx);
+        }
+    }
 
-        for row_idx in 0..lhs_index.len() {
-            if free_index[row_idx] != free_position as i32 {
-                continue;
-            }
+    for (free_position, rows) in free_rows.iter().enumerate() {
+        let mut stat_row = 0;
 
-            let lhs = lhs_index[row_idx] as usize - 1;
-            let rhs = rhs_index[row_idx] as usize - 1;
+        for observed_col in 0..n_observed {
+            let source_col = observed_indices[observed_col];
 
-            match op_code[row_idx] {
-                1 => d_directed[(rhs, lhs)] += 1.0,
-                2 => d_directed[(lhs, rhs)] += 1.0,
-                3 => {
-                    d_covariance[(lhs, rhs)] += 1.0;
-                    if lhs != rhs {
-                        d_covariance[(rhs, lhs)] += 1.0;
+            for observed_row in observed_col..n_observed {
+                let source_row = observed_indices[observed_row];
+                let mut derivative = 0.0;
+
+                for row_idx in rows {
+                    let lhs = lhs_index[*row_idx] as usize - 1;
+                    let rhs = rhs_index[*row_idx] as usize - 1;
+
+                    match op_code[*row_idx] {
+                        1 => {
+                            derivative += inverse[(source_row, rhs)] * full_implied[(lhs, source_col)]
+                                + full_implied[(lhs, source_row)] * inverse[(source_col, rhs)];
+                        }
+                        2 => {
+                            derivative += inverse[(source_row, lhs)] * full_implied[(rhs, source_col)]
+                                + full_implied[(rhs, source_row)] * inverse[(source_col, lhs)];
+                        }
+                        3 if lhs == rhs => {
+                            derivative += inverse[(source_row, lhs)] * inverse[(source_col, lhs)];
+                        }
+                        3 => {
+                            derivative += inverse[(source_row, lhs)] * inverse[(source_col, rhs)]
+                                + inverse[(source_row, rhs)] * inverse[(source_col, lhs)];
+                        }
+                        _ => unreachable!(),
                     }
                 }
-                _ => unreachable!(),
+
+                delta[(stat_row, free_position)] = derivative;
+                stat_row += 1;
             }
-        }
-
-        let d_inverse = inverse * d_directed * inverse;
-        let d_full_implied = &d_inverse * covariance * inverse.transpose()
-            + inverse * d_covariance * inverse.transpose()
-            + inverse * covariance * d_inverse.transpose();
-        let d_implied = select_observed(&d_full_implied, observed_indices);
-        let d_vech = vech(&d_implied);
-
-        for row_idx in 0..n_stats {
-            delta[(row_idx, free_position - 1)] = d_vech[row_idx];
         }
     }
 
@@ -542,16 +552,15 @@ fn ram_surfaces_from_rows(
         free_values,
         n_variables,
     );
-    let (implied, inverse) = implied_ram(&directed, &covariance, observed_indices)?;
+    let (implied, full_implied, inverse) = implied_ram(&directed, &covariance, observed_indices)?;
     let delta = ram_delta_from_rows(
         lhs_index,
         rhs_index,
         op_code,
         free_index,
-        &covariance,
+        &full_implied,
         &inverse,
         observed_indices,
-        n_variables,
         free_values.len(),
     );
 
