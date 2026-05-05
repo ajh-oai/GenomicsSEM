@@ -510,3 +510,46 @@ Selected comparisons:
     lavaan
 - The wrapper now keeps the experiment's strict contract: unsupported paths
   fail immediately instead of producing mixed or incorrect results.
+
+## 2026-05-04 17:41 PDT
+
+### Generic compiler scaffold
+
+- Added `LAVAAN_FAST_PLAN.md` to make the next phase explicit: `lavaan_fast`
+  should begin as a generic compiler layer rather than as another family of
+  hand-written fast paths.
+- Added a parameter-table compiler in `lavaanrust/R/compiler.R` that lowers the
+  current supported subset (`=~`, `~`, `~~`) into a RAM representation:
+  - directed matrix `A`
+  - residual covariance matrix `S`
+  - observed-variable selector `F`
+- Added generic reconstruction of:
+  - implied covariance `Sigma = F (I - A)^-1 S (I - A)^-T F^T`
+  - analytic `d vech(Sigma) / d theta` Jacobians
+- Kept unsupported operators strict-errors at the compiler boundary; `:=` still
+  does not silently pass through.
+
+### Validation
+
+- Added compiler tests for both current user-GWAS shapes:
+  - unrestricted one-factor model
+  - fixed-measurement one-factor model
+- The compiler now exactly reproduces the specialized rust-backed fit objects
+  for both:
+  - implied covariance matrices
+  - Jacobian matrices exposed through `lavInspect_rust(..., "delta")`
+- Local package validation after the compiler packet:
+  - `R CMD INSTALL lavaanrust`
+  - `Rscript -e 'testthat::test_dir("lavaanrust/tests/testthat")'`
+  - result: `46` passing tests
+
+### Next packet
+
+1. Route one existing family through the generic compiler without changing its
+   public wrapper contract.
+2. Then widen the syntax/compiler surface toward the real blocker set for
+   broader `userGWAS_rust()` coverage:
+   - labels and equality reuse
+   - direct effects
+   - residual covariances
+   - eventually defined parameters and nonlinear constraints

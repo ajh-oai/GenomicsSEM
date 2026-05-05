@@ -213,6 +213,11 @@ Broaden syntax and compatibility for `usermodel_rust()` and `userGWAS_rust()`:
 This is the first phase where parser breadth and lavaan-internal compatibility
 become the dominant risk.
 
+The compiler-first refinement for this phase is tracked separately in
+`LAVAAN_FAST_PLAN.md`: before adding more one-off model families, lower
+lavaan-style parameter tables into a reusable intermediate representation and
+move existing supported fits onto that representation incrementally.
+
 ### Phase 5: broaden only after measurements
 
 Once the isolated swap experiment is measured:
