@@ -393,6 +393,37 @@
   unlist(values, use.names = TRUE)
 }
 
+.lavaan_fast_normalize_free_ids <- function(par_table) {
+  par_table <- as.data.frame(par_table, stringsAsFactors = FALSE)
+  if (!nrow(par_table)) {
+    return(par_table)
+  }
+
+  next_free <- 1L
+  label_free <- integer()
+  normalized <- integer(nrow(par_table))
+  for (row_idx in seq_len(nrow(par_table))) {
+    if (par_table$free[[row_idx]] <= 0L) {
+      next
+    }
+
+    label <- par_table$label[[row_idx]]
+    if (nzchar(label) && label %in% names(label_free)) {
+      normalized[[row_idx]] <- label_free[[label]]
+      next
+    }
+
+    normalized[[row_idx]] <- next_free
+    if (nzchar(label)) {
+      label_free[[label]] <- next_free
+    }
+    next_free <- next_free + 1L
+  }
+
+  par_table$free <- normalized
+  par_table
+}
+
 .lavaan_fast_default_start <- function(op, lhs, rhs, observed_names, sample_cov) {
   if (identical(op, "=~")) {
     return(1)
@@ -527,22 +558,17 @@
   observed_endogenous <- unique(c(indicator_names, observed_regression_lhs))
   observed_exogenous <- setdiff(observed_names, observed_endogenous)
 
-  for (observed_name in observed_names) {
+  for (observed_name in observed_endogenous) {
     if (.lavaan_fast_edge_exists(rows, observed_name, "~~", observed_name)) {
       next
     }
 
-    start <- if (observed_name %in% observed_exogenous) {
-      sample_cov[observed_name, observed_name]
-    } else {
-      sample_cov[observed_name, observed_name] / 2
-    }
     rows[[length(rows) + 1L]] <- .lavaan_fast_new_auto_row(
       observed_name,
       "~~",
       observed_name,
       is_free = TRUE,
-      start_value = start
+      start_value = sample_cov[observed_name, observed_name] / 2
     )
   }
 
@@ -571,10 +597,24 @@
     }
   }
 
-  if (length(observed_exogenous) > 1L) {
-    for (col in seq_len(length(observed_exogenous) - 1L)) {
+  if (length(observed_exogenous)) {
+    for (col in seq_along(observed_exogenous)) {
+      lhs <- observed_exogenous[[col]]
+      if (!.lavaan_fast_edge_exists(rows, lhs, "~~", lhs)) {
+        rows[[length(rows) + 1L]] <- .lavaan_fast_new_auto_row(
+          lhs,
+          "~~",
+          lhs,
+          is_free = TRUE,
+          start_value = sample_cov[lhs, lhs]
+        )
+      }
+
+      if (col == length(observed_exogenous)) {
+        next
+      }
+
       for (row in (col + 1L):length(observed_exogenous)) {
-        lhs <- observed_exogenous[[col]]
         rhs <- observed_exogenous[[row]]
         if (.lavaan_fast_edge_exists(rows, lhs, "~~", rhs) || .lavaan_fast_edge_exists(rows, rhs, "~~", lhs)) {
           next
@@ -2051,6 +2091,7 @@
 }
 
 .fit_lavaan_fast_ram_model <- function(par_table, sample.cov, WLS.V) {
+  par_table <- .lavaan_fast_normalize_free_ids(par_table)
   observed_names <- colnames(sample.cov)
   if (is.null(observed_names)) {
     observed_names <- rownames(sample.cov)
@@ -2125,6 +2166,7 @@ sem_rust <- function(model, sample.cov, estimator = "ML", WLS.V = NULL, ...) {
 
   if (
     identical(estimator, "DWLS") &&
+      !std.lv &&
       !is.null(.parse_user_gwas_model(model)) &&
       is.matrix(sample.cov) &&
       is.matrix(WLS.V)
@@ -2315,7 +2357,17 @@ parTable_rust <- function(object, ...) {
     stop("parTable_rust() only supports lavaan_rust_fit objects.", call. = FALSE)
   }
 
-  object@ParTable
+  par_table <- object@ParTable
+  if (!"lower" %in% names(par_table)) {
+    insert_after <- match("label", names(par_table))
+    par_table <- cbind(
+      par_table[seq_len(insert_after)],
+      lower = rep(NA_real_, nrow(par_table)),
+      par_table[-seq_len(insert_after)]
+    )
+  }
+
+  par_table
 }
 
 #' Rust-backed experimental replacement for `stats::fitted()`.

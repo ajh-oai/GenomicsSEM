@@ -214,6 +214,54 @@ test_that("lavaan_fast generic parser auto-expands exogenous observed covariance
   expect_equal(parsed$start[match(c("X1~~X1", "X2~~X2", "X1~~X2"), row_names)], c(0.4, 0.6, 0.12))
 })
 
+test_that("lavaan_fast generic parser keeps lavaan auto-row order under std.lv", {
+  sample_cov <- diag(c(1, 1.2, 0.9, 0.4, 0.6))
+  dimnames(sample_cov) <- list(c("A", "B", "C", "X1", "X2"), c("A", "B", "C", "X1", "X2"))
+  sample_cov["X1", "X2"] <- 0.12
+  sample_cov["X2", "X1"] <- 0.12
+  model <- paste(
+    "F1 =~ A + B + C",
+    "F1 ~ X1 + X2",
+    sep = "\n"
+  )
+  parsed <- lavaanrust:::.lavaan_fast_parse_model_string(model, sample_cov, std.lv = TRUE)
+
+  expect_equal(
+    paste0(parsed$lhs, parsed$op, parsed$rhs),
+    c(
+      "F1=~A", "F1=~B", "F1=~C", "F1~X1", "F1~X2",
+      "A~~A", "B~~B", "C~~C", "F1~~F1",
+      "X1~~X1", "X1~~X2", "X2~~X2"
+    )
+  )
+})
+
+test_that("lavaan_fast normalizes stale unlabeled free ids like lavaan", {
+  fixture <- user_gwas_fixture()
+  normalized <- lavaanrust:::.lavaan_fast_normalize_free_ids(fixture$fixed_model)
+  labeled <- fixture$fixed_model
+  labeled$label[c(4L, 8L)] <- "shared"
+  labeled_normalized <- lavaanrust:::.lavaan_fast_normalize_free_ids(labeled)
+
+  expect_equal(normalized$free, c(0L, 0L, 0L, seq_len(6L)))
+  expect_equal(labeled_normalized$free[c(4L, 8L)], c(1L, 1L))
+})
+
+test_that("parTable_rust adds lower bounds to specialized fit tables", {
+  fixture <- user_gwas_fixture()
+  fit <- lavaanrust::sem_rust(
+    fixture$model,
+    sample.cov = fixture$sample_cov,
+    estimator = "DWLS",
+    WLS.V = fixture$wls_v
+  )
+  par_table <- lavaanrust::parTable_rust(fit)
+
+  expect_true("lower" %in% names(par_table))
+  expect_equal(names(par_table)[match("label", names(par_table)) + 1L], "lower")
+  expect_true(all(is.na(par_table$lower)))
+})
+
 test_that("lavaan_fast generic parser tolerates row-only covariance names", {
   sample_cov <- diag(c(1, 1.2, 0.9))
   rownames(sample_cov) <- c("A", "B", "C")

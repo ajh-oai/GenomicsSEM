@@ -978,3 +978,45 @@ covariance subset.
 This closes the largest remaining front-end gap for ordinary user-authored DWLS
 RAM models. The next meaningful symbolic gap is richer constraint syntax, not
 basic model-string coverage.
+
+## 2026-05-06 16:05 PDT
+
+### userGWAS std.lv coverage
+
+- Re-opened `userGWAS_rust()` for `std.lv = TRUE` instead of keeping the earlier
+  defensive rejection.
+- Kept the specialized one-factor SNP solver on the `std.lv = FALSE` slice and
+  route `std.lv = TRUE` through the generic RAM evaluator, where the broader
+  syntax support already exists.
+- Matched lavaan's parameter-table behavior in three places that matter for the
+  fixed-measurement path:
+  - auto-generated row order for endogenous residuals, latent variances, and
+    exogenous observed rows
+  - a `lower` column on specialized `parTable_rust()` output
+  - lavaan-style renumbering of unlabeled free rows when a parameter table is
+    re-ingested after GenomicSEM reconstructs the with-SNP model
+- Added top-level `GenomicSEM` regression coverage for:
+  - the full `userGWAS_rust()` matrix over `std.lv = TRUE/FALSE`,
+    `fix_measurement = TRUE/FALSE`, and `Q_SNP = TRUE/FALSE`
+  - a broader end-to-end model using labels, a direct SNP effect, and
+    `combo := gamma * direct`
+
+### Validation
+
+- Local regression suites:
+  - `lavaanrust/tests/testthat`: `104` passing tests
+  - top-level `GenomicSEM` wrapper tests: `22` passing expectations
+- Simple one-factor `userGWAS()` equivalence fixture, 2 SNPs:
+  - all 8 supported matrix cells preserve row order exactly
+  - maximum old-vs-rust absolute difference across the matrix: `1.00e-07`
+- Flexible direct-effect fixture, 2 SNPs, `std.lv = TRUE`:
+  - `fix_measurement = FALSE`: maximum absolute difference `1.10e-08`
+  - `fix_measurement = TRUE`: maximum absolute difference `1.19e-08`
+
+### Coverage significance
+
+`userGWAS_rust()` now covers the full current simple one-factor DWLS matrix with
+either loading-identification convention, plus a meaningfully broader generic
+workflow with labeled parameters and a defined parameter. That makes the
+generic compiler path part of the real wrapper contract rather than just a
+standalone evaluator experiment.
