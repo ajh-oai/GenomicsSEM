@@ -883,3 +883,51 @@ For GenomicSEM-oriented coverage, items 1-3 are the important remaining front-en
 work. Full lavaan parity is substantially larger than that and would include
 means/intercepts, additional estimators, categorical machinery, groups, and much
 more of lavaan's option surface.
+
+## 2026-05-06 14:30 PDT
+
+### Generic auto expansion and `std.lv`
+
+- Extended the generic RAM string parser to reproduce the main lavaan auto-row
+  behavior needed by shorthand measurement models:
+  - observed residual variances for endogenous indicators
+  - observed exogenous variances and pairwise covariances
+  - latent variances
+  - exogenous latent covariances
+- Added generic identification behavior:
+  - marker scaling when `std.lv = FALSE`
+  - fixed latent variances with free loadings when `std.lv = TRUE`
+- Used live lavaan `parTable()` output as the reference while implementing the
+  row construction and start-value conventions, including the `0.05` latent
+  variance starts on marker-scaled factors.
+- Replaced the generic RAM fit object's placeholder latent-correlation matrix
+  with a correlation matrix computed from the fitted latent covariance implied
+  by the compiled RAM system.
+
+### Validation
+
+- Added regressions for:
+  - shorthand auto-expansion under marker scaling
+  - shorthand auto-identification under `std.lv = TRUE`
+  - auto-generated exogenous observed variances/covariances
+  - end-to-end fitting of a two-factor shorthand string through the generic
+    native RAM path
+- Local package validation:
+  - `R CMD INSTALL lavaanrust`
+  - `Rscript -e 'testthat::test_dir("lavaanrust/tests/testthat")'`
+  - result: `88` passing tests
+
+### Coverage significance
+
+The generic path now covers the common shorthand measurement-model surface that
+GenomicSEM users actually write, instead of only accepting fully expanded RAM
+strings. The largest remaining front-end gaps are now:
+
+1. user-defined parameters via `:=`
+2. richer symbolic constraints beyond repeated labels and simple lower bounds
+3. broader standardized-output compatibility for generic multi-factor models
+
+Beyond those, reaching full lavaan coverage would still require a much larger
+surface: means/intercepts, additional estimators, categorical machinery,
+multi-group behavior, and other option families outside the current DWLS
+covariance subset.

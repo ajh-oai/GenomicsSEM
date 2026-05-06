@@ -20,7 +20,7 @@ test_that("unsupported syntax errors instead of falling back to lavaan", {
   fixture <- one_factor_fixture()
   model <- paste(
     "F1 =~ A + B + C",
-    "F2 =~ A + B + C",
+    "omega := F1~~F1",
     sep = "\n"
   )
   expect_error(

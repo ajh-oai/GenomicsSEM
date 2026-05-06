@@ -146,7 +146,8 @@
     fixed_value = fixed_value,
     start_value = start_value,
     label = label,
-    is_free = !is.finite(fixed_value)
+    is_free = !is.finite(fixed_value),
+    free_marker = free_marker
   )
 }
 
@@ -215,25 +216,169 @@
   merged
 }
 
-.lavaan_fast_has_explicit_variances <- function(rows, observed_names) {
+.lavaan_fast_edge_exists <- function(rows, lhs, op, rhs) {
+  any(vapply(rows, function(row) {
+    identical(row$lhs, lhs) &&
+      identical(row$op, op) &&
+      identical(row$rhs, rhs)
+  }, logical(1L)))
+}
+
+.lavaan_fast_new_auto_row <- function(lhs, op, rhs, is_free, fixed_value = NA_real_, start_value = NA_real_) {
+  list(
+    lhs = lhs,
+    op = op,
+    rhs = rhs,
+    fixed_value = fixed_value,
+    start_value = start_value,
+    label = "",
+    is_free = is_free,
+    free_marker = FALSE,
+    user = 0L
+  )
+}
+
+.lavaan_fast_apply_identification <- function(rows, std.lv) {
   latent_names <- unique(vapply(rows, function(row) {
     if (identical(row$op, "=~")) row$lhs else ""
   }, character(1L)))
   latent_names <- latent_names[nzchar(latent_names)]
-  required_variances <- unique(c(observed_names, latent_names))
-  explicit_variances <- unique(vapply(rows, function(row) {
-    if (identical(row$op, "~~") && identical(row$lhs, row$rhs)) {
-      row$lhs
-    } else {
-      ""
-    }
-  }, character(1L)))
-  explicit_variances <- explicit_variances[nzchar(explicit_variances)]
 
-  all(required_variances %in% explicit_variances)
+  if (isTRUE(std.lv)) {
+    return(rows)
+  }
+
+  for (latent_name in latent_names) {
+    loading_rows <- which(vapply(rows, function(row) {
+      identical(row$op, "=~") && identical(row$lhs, latent_name)
+    }, logical(1L)))
+    if (!length(loading_rows)) {
+      next
+    }
+
+    row_idx <- loading_rows[[1L]]
+    row <- rows[[row_idx]]
+    if (row$is_free && !isTRUE(row$free_marker)) {
+      row$is_free <- FALSE
+      row$fixed_value <- if (is.finite(row$start_value)) row$start_value else 1
+      rows[[row_idx]] <- row
+    }
+  }
+
+  rows
 }
 
-.lavaan_fast_parse_model_string <- function(model, sample_cov) {
+.lavaan_fast_expand_auto_rows <- function(rows, observed_names, sample_cov, std.lv) {
+  rows <- .lavaan_fast_apply_identification(rows, std.lv)
+  latent_names <- unique(vapply(rows, function(row) {
+    if (identical(row$op, "=~")) row$lhs else ""
+  }, character(1L)))
+  latent_names <- latent_names[nzchar(latent_names)]
+  indicator_names <- unique(vapply(rows, function(row) {
+    if (identical(row$op, "=~")) row$rhs else ""
+  }, character(1L)))
+  indicator_names <- indicator_names[nzchar(indicator_names)]
+  observed_regression_lhs <- unique(vapply(rows, function(row) {
+    if (identical(row$op, "~") && row$lhs %in% observed_names) row$lhs else ""
+  }, character(1L)))
+  observed_regression_lhs <- observed_regression_lhs[nzchar(observed_regression_lhs)]
+  observed_endogenous <- unique(c(indicator_names, observed_regression_lhs))
+  observed_exogenous <- setdiff(observed_names, observed_endogenous)
+
+  for (observed_name in observed_names) {
+    if (.lavaan_fast_edge_exists(rows, observed_name, "~~", observed_name)) {
+      next
+    }
+
+    start <- if (observed_name %in% observed_exogenous) {
+      sample_cov[observed_name, observed_name]
+    } else {
+      sample_cov[observed_name, observed_name] / 2
+    }
+    rows[[length(rows) + 1L]] <- .lavaan_fast_new_auto_row(
+      observed_name,
+      "~~",
+      observed_name,
+      is_free = TRUE,
+      start_value = start
+    )
+  }
+
+  for (latent_name in latent_names) {
+    if (.lavaan_fast_edge_exists(rows, latent_name, "~~", latent_name)) {
+      next
+    }
+
+    rows[[length(rows) + 1L]] <- if (isTRUE(std.lv)) {
+      .lavaan_fast_new_auto_row(
+        latent_name,
+        "~~",
+        latent_name,
+        is_free = FALSE,
+        fixed_value = 1,
+        start_value = 1
+      )
+    } else {
+      .lavaan_fast_new_auto_row(
+        latent_name,
+        "~~",
+        latent_name,
+        is_free = TRUE,
+        start_value = 0.05
+      )
+    }
+  }
+
+  if (length(observed_exogenous) > 1L) {
+    for (col in seq_len(length(observed_exogenous) - 1L)) {
+      for (row in (col + 1L):length(observed_exogenous)) {
+        lhs <- observed_exogenous[[col]]
+        rhs <- observed_exogenous[[row]]
+        if (.lavaan_fast_edge_exists(rows, lhs, "~~", rhs) || .lavaan_fast_edge_exists(rows, rhs, "~~", lhs)) {
+          next
+        }
+
+        rows[[length(rows) + 1L]] <- .lavaan_fast_new_auto_row(
+          lhs,
+          "~~",
+          rhs,
+          is_free = TRUE,
+          start_value = sample_cov[lhs, rhs]
+        )
+      }
+    }
+  }
+
+  latent_regression_lhs <- unique(vapply(rows, function(row) {
+    if (identical(row$op, "~") && row$lhs %in% latent_names) row$lhs else ""
+  }, character(1L)))
+  latent_regression_lhs <- latent_regression_lhs[nzchar(latent_regression_lhs)]
+  exogenous_latents <- setdiff(latent_names, latent_regression_lhs)
+
+  if (length(exogenous_latents) > 1L) {
+    for (col in seq_len(length(exogenous_latents) - 1L)) {
+      for (row in (col + 1L):length(exogenous_latents)) {
+        lhs <- exogenous_latents[[col]]
+        rhs <- exogenous_latents[[row]]
+        if (.lavaan_fast_edge_exists(rows, lhs, "~~", rhs) || .lavaan_fast_edge_exists(rows, rhs, "~~", lhs)) {
+          next
+        }
+
+        rows[[length(rows) + 1L]] <- .lavaan_fast_new_auto_row(
+          lhs,
+          "~~",
+          rhs,
+          is_free = TRUE,
+          start_value = 0
+        )
+      }
+    }
+  }
+
+  rows
+}
+
+.lavaan_fast_parse_model_string <- function(model, sample_cov, std.lv = FALSE) {
   if (
     !is.character(model) ||
       length(model) != 1L ||
@@ -320,7 +465,7 @@
       }
 
       rows[[length(rows) + 1L]] <- c(
-        list(lhs = lhs, op = op),
+        list(lhs = lhs, op = op, user = 1L),
         parsed_term
       )
     }
@@ -330,9 +475,7 @@
   if (is.null(rows)) {
     return(NULL)
   }
-  if (!.lavaan_fast_has_explicit_variances(rows, observed_names)) {
-    return(NULL)
-  }
+  rows <- .lavaan_fast_expand_auto_rows(rows, observed_names, sample_cov, std.lv)
   row_labels <- vapply(rows, `[[`, character(1L), "label")
   if (length(lower_bounds) && !all(names(lower_bounds) %in% row_labels[nzchar(row_labels)])) {
     return(NULL)
@@ -370,7 +513,7 @@
       lhs = row$lhs,
       op = row$op,
       rhs = row$rhs,
-      user = 1L,
+      user = row$user,
       block = 1L,
       group = 1L,
       free = as.integer(free),
@@ -1584,6 +1727,22 @@
   .new_user_gwas_fixed_measurement_fit(par_table, sample.cov, WLS.V, spec, fit)
 }
 
+.lavaan_fast_latent_correlation <- function(compiled, free_values) {
+  if (!length(compiled$latent_names)) {
+    return(matrix(numeric(), nrow = 0L, ncol = 0L))
+  }
+
+  matrices <- .lavaan_fast_ram_matrices(compiled, free_values)
+  inverse <- solve(diag(nrow(matrices$A)) - matrices$A)
+  full_implied <- inverse %*% matrices$S %*% t(inverse)
+  latent_idx <- match(compiled$latent_names, compiled$variable_names)
+  latent_cov <- full_implied[latent_idx, latent_idx, drop = FALSE]
+  latent_sd <- sqrt(diag(latent_cov))
+  latent_cor <- latent_cov / outer(latent_sd, latent_sd)
+  dimnames(latent_cor) <- list(compiled$latent_names, compiled$latent_names)
+  latent_cor
+}
+
 .new_lavaan_fast_ram_fit <- function(par_table, sample.cov, WLS.V, compiled, fit) {
   par_table <- as.data.frame(par_table, stringsAsFactors = FALSE)
   rownames(par_table) <- NULL
@@ -1599,13 +1758,7 @@
     df = length(.stat_names(compiled$observed_names)) - npar,
     srmr = fit$srmr
   )
-  cor_lv <- if (length(compiled$latent_names)) {
-    latent_cor <- diag(1, nrow = length(compiled$latent_names), ncol = length(compiled$latent_names))
-    dimnames(latent_cor) <- list(compiled$latent_names, compiled$latent_names)
-    latent_cor
-  } else {
-    matrix(numeric(), nrow = 0L, ncol = 0L)
-  }
+  cor_lv <- .lavaan_fast_latent_correlation(compiled, fit$estimates)
 
   methods::new(
     "lavaan_rust_fit",
@@ -1737,7 +1890,7 @@ sem_rust <- function(model, sample.cov, estimator = "ML", WLS.V = NULL, ...) {
       is.matrix(sample.cov) &&
       is.matrix(WLS.V)
   ) {
-    parsed_model <- .lavaan_fast_parse_model_string(model, sample.cov)
+    parsed_model <- .lavaan_fast_parse_model_string(model, sample.cov, std.lv = std.lv)
     if (!is.null(parsed_model)) {
       return(.fit_lavaan_fast_ram_model(parsed_model, sample.cov, WLS.V))
     }

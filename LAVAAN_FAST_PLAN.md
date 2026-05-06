@@ -73,8 +73,9 @@ the compiler seam before moving solvers onto it.
    - done: explicit RAM strings using `=~`, `~`, and `~~`
    - done: fixed coefficients, `NA*`, `start()`, labels/equality reuse,
      residual covariances, direct effects, and simple labeled lower bounds
-   - next: lavaan-style auto expansion for omitted variances/residuals and
-     generic `std.lv` behavior
+   - done: lavaan-style auto expansion for omitted residual/latent variances,
+     exogenous covariances, and generic `std.lv` behavior
+   - next: decide how much of lavaan's symbolic layer belongs in the fast path
 6. Extend the symbolic layer only where GenomicSEM needs it next:
    - done: equality reuse via repeated labels
    - done: simple lower-bound constraints
@@ -98,18 +99,17 @@ SNP ~~ 0.42*SNP
 rvA > .001
 ```
 
-That covers multi-factor/direct-effect model strings once the user has made the
-RAM model explicit. It intentionally does not yet reproduce lavaan's automatic
-model expansion. For the generic path, every observed and latent variable still
-needs an explicit diagonal variance row.
+That covers multi-factor/direct-effect model strings and the common shorthand
+case where lavaan auto-generates omitted residual/latent variances and
+exogenous covariances. The generic path now supports both marker-scaled and
+`std.lv = TRUE` identification for shorthand measurement models.
 
 The main remaining gaps to broad GenomicSEM workflow coverage are:
 
-1. auto-generated variances/residuals and generic `std.lv` handling for shorthand
-   syntax such as `F1 =~ A + B + C`
-2. user-defined parameters via `:=`
-3. broader nonlinear/equality constraint syntax beyond repeated labels and
+1. user-defined parameters via `:=`
+2. broader nonlinear/equality constraint syntax beyond repeated labels and
    simple lower bounds
+3. broader standardized-output compatibility for generic multi-factor models
 4. non-DWLS estimators and the wider parts of lavaan outside the RAM covariance
    subset
 

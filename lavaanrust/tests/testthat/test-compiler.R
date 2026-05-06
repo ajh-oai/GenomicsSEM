@@ -156,6 +156,87 @@ test_that("lavaan_fast generic string path enforces simple lower bounds", {
   expect_equal(lavaanrust::parTable_rust(fit)$est, 1.5, tolerance = 1e-10)
 })
 
+test_that("lavaan_fast generic parser auto-expands marker-scaled shorthand", {
+  sample_cov <- diag(c(1, 1.2, 0.9, 1.1, 0.8, 1.3))
+  dimnames(sample_cov) <- list(c("A", "B", "C", "D", "E", "F"), c("A", "B", "C", "D", "E", "F"))
+  model <- paste(
+    "F1 =~ A + B + C",
+    "F2 =~ D + E + F",
+    sep = "\n"
+  )
+  parsed <- lavaanrust:::.lavaan_fast_parse_model_string(model, sample_cov, std.lv = FALSE)
+
+  expect_equal(
+    paste0(parsed$lhs, parsed$op, parsed$rhs),
+    c(
+      "F1=~A", "F1=~B", "F1=~C", "F2=~D", "F2=~E", "F2=~F",
+      "A~~A", "B~~B", "C~~C", "D~~D", "E~~E", "F~~F",
+      "F1~~F1", "F2~~F2", "F1~~F2"
+    )
+  )
+  expect_equal(parsed$user, c(rep(1L, 6L), rep(0L, 9L)))
+  expect_equal(parsed$free[1:6], c(0L, 1L, 2L, 0L, 3L, 4L))
+  expect_equal(parsed$ustart[c(1L, 4L, 13L, 14L)], c(1, 1, 0.05, 0.05))
+  expect_equal(parsed$start[7:12], unname(diag(sample_cov)) / 2)
+  expect_equal(parsed$start[13:15], c(0.05, 0.05, 0))
+})
+
+test_that("lavaan_fast generic parser supports std.lv auto-identification", {
+  sample_cov <- diag(c(1, 1.2, 0.9, 1.1, 0.8, 1.3))
+  dimnames(sample_cov) <- list(c("A", "B", "C", "D", "E", "F"), c("A", "B", "C", "D", "E", "F"))
+  model <- paste(
+    "F1 =~ A + B + C",
+    "F2 =~ D + E + F",
+    sep = "\n"
+  )
+  parsed <- lavaanrust:::.lavaan_fast_parse_model_string(model, sample_cov, std.lv = TRUE)
+  latent_var_rows <- which(parsed$op == "~~" & parsed$lhs %in% c("F1", "F2") & parsed$lhs == parsed$rhs)
+
+  expect_equal(parsed$free[1:6], seq_len(6L))
+  expect_equal(parsed$free[latent_var_rows], c(0L, 0L))
+  expect_equal(parsed$ustart[latent_var_rows], c(1, 1))
+})
+
+test_that("lavaan_fast generic parser auto-expands exogenous observed covariance rows", {
+  sample_cov <- diag(c(1, 1.2, 0.9, 0.4, 0.6))
+  dimnames(sample_cov) <- list(c("A", "B", "C", "X1", "X2"), c("A", "B", "C", "X1", "X2"))
+  sample_cov["X1", "X2"] <- 0.12
+  sample_cov["X2", "X1"] <- 0.12
+  model <- paste(
+    "F1 =~ A + B + C",
+    "F1 ~ X1 + X2",
+    sep = "\n"
+  )
+  parsed <- lavaanrust:::.lavaan_fast_parse_model_string(model, sample_cov, std.lv = FALSE)
+  row_names <- paste0(parsed$lhs, parsed$op, parsed$rhs)
+
+  expect_true(all(c("X1~~X1", "X2~~X2", "X1~~X2") %in% row_names))
+  expect_equal(parsed$start[match(c("X1~~X1", "X2~~X2", "X1~~X2"), row_names)], c(0.4, 0.6, 0.12))
+})
+
+test_that("lavaan_fast generic shorthand strings fit through the native RAM path", {
+  sample_cov <- diag(c(1, 1.2, 0.9, 1.1, 0.8, 1.3))
+  dimnames(sample_cov) <- list(c("A", "B", "C", "D", "E", "F"), c("A", "B", "C", "D", "E", "F"))
+  model <- paste(
+    "F1 =~ A + B + C",
+    "F2 =~ D + E + F",
+    sep = "\n"
+  )
+  parsed <- lavaanrust:::.lavaan_fast_parse_model_string(model, sample_cov, std.lv = FALSE)
+  compiled <- lavaanrust:::.lavaan_fast_compile_par_table(parsed, colnames(sample_cov))
+  target_cov <- lavaanrust:::.lavaan_fast_implied_covariance(compiled)
+  fit <- lavaanrust::sem_rust(
+    model,
+    sample.cov = target_cov,
+    estimator = "DWLS",
+    WLS.V = diag(21)
+  )
+
+  expect_equal(fit@Model$model_kind, "ram_dwls_generic")
+  expect_equal(lavaanrust::fitted_rust(fit)$cov, target_cov, tolerance = 1e-8)
+  expect_equal(dim(lavaanrust::lavInspect_rust(fit, "cor.lv")), c(2L, 2L))
+})
+
 test_that("lavaan_fast compiler rejects syntax outside the first RAM subset", {
   fixture <- user_gwas_fixture()
   par_table <- fixture$fixed_model
