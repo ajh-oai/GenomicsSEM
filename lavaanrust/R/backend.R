@@ -67,6 +67,332 @@
   )
 }
 
+.lavaan_fast_numeric_value <- function(value) {
+  parsed <- suppressWarnings(as.numeric(value))
+  if (length(parsed) == 1L && is.finite(parsed)) {
+    parsed
+  } else {
+    NA_real_
+  }
+}
+
+.lavaan_fast_parse_term <- function(term) {
+  pieces <- trimws(strsplit(trimws(term), "*", fixed = TRUE)[[1L]])
+  pieces <- pieces[nzchar(pieces)]
+
+  if (!length(pieces)) {
+    return(NULL)
+  }
+
+  rhs <- pieces[[length(pieces)]]
+  modifiers <- if (length(pieces) > 1L) pieces[-length(pieces)] else character()
+  fixed_value <- NA_real_
+  start_value <- NA_real_
+  label <- ""
+  free_marker <- FALSE
+
+  for (modifier in modifiers) {
+    if (identical(toupper(modifier), "NA")) {
+      free_marker <- TRUE
+      next
+    }
+
+    start_match <- regexec("^start\\(([^()]*)\\)$", modifier)
+    start_parts <- regmatches(modifier, start_match)[[1L]]
+    if (length(start_parts)) {
+      parsed_start <- .lavaan_fast_numeric_value(start_parts[[2L]])
+      if (!is.finite(parsed_start)) {
+        return(NULL)
+      }
+
+      if (is.finite(start_value) && !isTRUE(all.equal(start_value, parsed_start))) {
+        return(NULL)
+      }
+
+      start_value <- parsed_start
+      next
+    }
+
+    numeric_value <- .lavaan_fast_numeric_value(modifier)
+    if (is.finite(numeric_value)) {
+      if (is.finite(fixed_value) && !isTRUE(all.equal(fixed_value, numeric_value))) {
+        return(NULL)
+      }
+
+      fixed_value <- numeric_value
+      next
+    }
+
+    if (!grepl("^[A-Za-z.][A-Za-z0-9_.]*$", modifier)) {
+      return(NULL)
+    }
+
+    if (nzchar(label) && !identical(label, modifier)) {
+      return(NULL)
+    }
+
+    label <- modifier
+  }
+
+  if (
+    !grepl("^[A-Za-z.][A-Za-z0-9_.]*$", rhs) ||
+      (is.finite(fixed_value) && free_marker)
+  ) {
+    return(NULL)
+  }
+
+  list(
+    rhs = rhs,
+    fixed_value = fixed_value,
+    start_value = start_value,
+    label = label,
+    is_free = !is.finite(fixed_value)
+  )
+}
+
+.lavaan_fast_default_start <- function(op, lhs, rhs, observed_names, sample_cov) {
+  if (identical(op, "=~")) {
+    return(1)
+  }
+
+  if (identical(op, "~~") && identical(lhs, rhs)) {
+    if (lhs %in% observed_names) {
+      return(sample_cov[lhs, lhs])
+    }
+
+    return(1)
+  }
+
+  0
+}
+
+.lavaan_fast_merge_term_rows <- function(rows) {
+  merged <- list()
+  positions <- list()
+
+  for (row in rows) {
+    key <- paste(row$lhs, row$op, row$rhs, sep = "\r")
+    position <- positions[[key]]
+
+    if (is.null(position)) {
+      merged[[length(merged) + 1L]] <- row
+      positions[[key]] <- length(merged)
+      next
+    }
+
+    previous <- merged[[position]]
+    if (
+      isTRUE(previous$is_free != row$is_free) ||
+        (
+          !previous$is_free &&
+            !isTRUE(all.equal(previous$fixed_value, row$fixed_value))
+        ) ||
+        (
+          nzchar(previous$label) &&
+            nzchar(row$label) &&
+            !identical(previous$label, row$label)
+        ) ||
+        (
+          is.finite(previous$start_value) &&
+            is.finite(row$start_value) &&
+            !isTRUE(all.equal(previous$start_value, row$start_value))
+        )
+    ) {
+      return(NULL)
+    }
+
+    if (!nzchar(previous$label)) {
+      previous$label <- row$label
+    }
+
+    if (!is.finite(previous$start_value)) {
+      previous$start_value <- row$start_value
+    }
+
+    merged[[position]] <- previous
+  }
+
+  merged
+}
+
+.lavaan_fast_has_explicit_variances <- function(rows, observed_names) {
+  latent_names <- unique(vapply(rows, function(row) {
+    if (identical(row$op, "=~")) row$lhs else ""
+  }, character(1L)))
+  latent_names <- latent_names[nzchar(latent_names)]
+  required_variances <- unique(c(observed_names, latent_names))
+  explicit_variances <- unique(vapply(rows, function(row) {
+    if (identical(row$op, "~~") && identical(row$lhs, row$rhs)) {
+      row$lhs
+    } else {
+      ""
+    }
+  }, character(1L)))
+  explicit_variances <- explicit_variances[nzchar(explicit_variances)]
+
+  all(required_variances %in% explicit_variances)
+}
+
+.lavaan_fast_parse_model_string <- function(model, sample_cov) {
+  if (
+    !is.character(model) ||
+      length(model) != 1L ||
+      !is.matrix(sample_cov)
+  ) {
+    return(NULL)
+  }
+
+  observed_names <- colnames(sample_cov)
+  if (is.null(observed_names)) {
+    observed_names <- rownames(sample_cov)
+  }
+  if (is.null(observed_names)) {
+    return(NULL)
+  }
+
+  lines <- trimws(strsplit(model, "\n", fixed = TRUE)[[1L]])
+  lines <- trimws(sub("#.*$", "", lines))
+  lines <- lines[nzchar(lines)]
+
+  if (!length(lines) || any(grepl("(:=|==|<)", lines))) {
+    return(NULL)
+  }
+
+  rows <- list()
+  lower_bounds <- numeric()
+  for (line in lines) {
+    constraint_match <- regexec(
+      "^([A-Za-z.][A-Za-z0-9_.]*)\\s*>\\s*([+-]?(?:[0-9]*\\.?[0-9]+)(?:[eE][+-]?[0-9]+)?)$",
+      line
+    )
+    constraint_parts <- regmatches(line, constraint_match)[[1L]]
+    if (length(constraint_parts)) {
+      label <- constraint_parts[[2L]]
+      lower <- .lavaan_fast_numeric_value(constraint_parts[[3L]])
+      if (!is.finite(lower)) {
+        return(NULL)
+      }
+
+      if (label %in% names(lower_bounds) && !isTRUE(all.equal(lower_bounds[[label]], lower))) {
+        return(NULL)
+      }
+
+      lower_bounds[[label]] <- lower
+      next
+    }
+
+    if (grepl(">", line, fixed = TRUE)) {
+      return(NULL)
+    }
+
+    op <- if (grepl("=~", line, fixed = TRUE)) {
+      "=~"
+    } else if (grepl("~~", line, fixed = TRUE)) {
+      "~~"
+    } else if (grepl("~", line, fixed = TRUE)) {
+      "~"
+    } else {
+      ""
+    }
+    if (!nzchar(op)) {
+      return(NULL)
+    }
+
+    parts <- trimws(strsplit(line, op, fixed = TRUE)[[1L]])
+    if (
+      length(parts) != 2L ||
+        !grepl("^[A-Za-z.][A-Za-z0-9_.]*$", parts[[1L]])
+    ) {
+      return(NULL)
+    }
+
+    lhs <- parts[[1L]]
+    rhs_terms <- trimws(strsplit(parts[[2L]], "+", fixed = TRUE)[[1L]])
+    rhs_terms <- rhs_terms[nzchar(rhs_terms)]
+    if (!length(rhs_terms)) {
+      return(NULL)
+    }
+
+    for (rhs_term in rhs_terms) {
+      parsed_term <- .lavaan_fast_parse_term(rhs_term)
+      if (is.null(parsed_term)) {
+        return(NULL)
+      }
+
+      rows[[length(rows) + 1L]] <- c(
+        list(lhs = lhs, op = op),
+        parsed_term
+      )
+    }
+  }
+
+  rows <- .lavaan_fast_merge_term_rows(rows)
+  if (is.null(rows)) {
+    return(NULL)
+  }
+  if (!.lavaan_fast_has_explicit_variances(rows, observed_names)) {
+    return(NULL)
+  }
+  row_labels <- vapply(rows, `[[`, character(1L), "label")
+  if (length(lower_bounds) && !all(names(lower_bounds) %in% row_labels[nzchar(row_labels)])) {
+    return(NULL)
+  }
+
+  free_labels <- integer()
+  next_free <- 1L
+  par_rows <- vector("list", length(rows))
+  for (row_idx in seq_along(rows)) {
+    row <- rows[[row_idx]]
+    free <- 0L
+
+    if (row$is_free) {
+      if (nzchar(row$label) && row$label %in% names(free_labels)) {
+        free <- free_labels[[row$label]]
+      } else {
+        free <- next_free
+        if (nzchar(row$label)) {
+          free_labels[[row$label]] <- free
+        }
+        next_free <- next_free + 1L
+      }
+    }
+
+    start <- if (is.finite(row$fixed_value)) {
+      row$fixed_value
+    } else if (is.finite(row$start_value)) {
+      row$start_value
+    } else {
+      .lavaan_fast_default_start(row$op, row$lhs, row$rhs, observed_names, sample_cov)
+    }
+
+    par_rows[[row_idx]] <- data.frame(
+      id = row_idx,
+      lhs = row$lhs,
+      op = row$op,
+      rhs = row$rhs,
+      user = 1L,
+      block = 1L,
+      group = 1L,
+      free = as.integer(free),
+      ustart = if (row$is_free) row$start_value else row$fixed_value,
+      exo = 0L,
+      label = row$label,
+      lower = if (nzchar(row$label) && row$label %in% names(lower_bounds)) {
+        lower_bounds[[row$label]]
+      } else {
+        NA_real_
+      },
+      plabel = paste0(".p", row_idx, "."),
+      start = start,
+      est = start,
+      se = 0,
+      stringsAsFactors = FALSE
+    )
+  }
+
+  do.call(rbind, par_rows)
+}
+
 .one_factor_latent_name <- function(model) {
   loading_line <- trimws(strsplit(model, "\n", fixed = TRUE)[[1L]])
   loading_line <- loading_line[grepl("=~", loading_line, fixed = TRUE)][[1L]]
@@ -1403,6 +1729,18 @@ sem_rust <- function(model, sample.cov, estimator = "ML", WLS.V = NULL, ...) {
       WLS.V,
       "commonfactor_null_dwls"
     ))
+  }
+
+  if (
+    identical(estimator, "DWLS") &&
+      is.character(model) &&
+      is.matrix(sample.cov) &&
+      is.matrix(WLS.V)
+  ) {
+    parsed_model <- .lavaan_fast_parse_model_string(model, sample.cov)
+    if (!is.null(parsed_model)) {
+      return(.fit_lavaan_fast_ram_model(parsed_model, sample.cov, WLS.V))
+    }
   }
 
   if (

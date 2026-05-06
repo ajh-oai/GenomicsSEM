@@ -657,25 +657,6 @@ fn ram_implied_from_rows(
     Ok(implied)
 }
 
-fn covariance_variance_free_mask(
-    lhs_index: &[i32],
-    rhs_index: &[i32],
-    op_code: &[i32],
-    free_index: &[i32],
-    n_free: usize,
-) -> Vec<bool> {
-    let mut mask = vec![false; n_free];
-
-    for row_idx in 0..lhs_index.len() {
-        let free = free_index[row_idx];
-        if op_code[row_idx] == 3 && lhs_index[row_idx] == rhs_index[row_idx] && free > 0 {
-            mask[free as usize - 1] = true;
-        }
-    }
-
-    mask
-}
-
 /// Fit the covariance-only one-factor DWLS slice used by GenomicSEM's
 /// `commonfactor()` model.
 ///
@@ -1393,6 +1374,7 @@ fn evaluate_ram_surfaces(
 /// @param observed_index Observed-variable indices in the full RAM system.
 /// @param free_row_offsets Offsets into `free_row_indices` for each free parameter.
 /// @param free_row_indices Flattened 1-based row indices grouped by free parameter.
+/// @param lower_bounds Lower bound for each free parameter.
 /// @param n_variables Number of variables in the full RAM system.
 /// @param max_iter Maximum optimizer iterations.
 /// @param tol Convergence tolerance.
@@ -1410,6 +1392,7 @@ fn fit_ram_dwls(
     observed_index: Integers,
     free_row_offsets: Integers,
     free_row_indices: Integers,
+    lower_bounds: Doubles,
     n_variables: i32,
     max_iter: i32,
     tol: f64,
@@ -1437,6 +1420,7 @@ fn fit_ram_dwls(
         .iter()
         .map(|value| value.0)
         .collect::<Vec<_>>();
+    let lower_bounds = lower_bounds.iter().map(|value| value.0).collect::<Vec<_>>();
     let observed_indices = validate_ram_indices(
         &lhs_index,
         &rhs_index,
@@ -1453,6 +1437,9 @@ fn fit_ram_dwls(
         &free_index,
         initial_free_values.len(),
     )?;
+    if lower_bounds.len() != initial_free_values.len() {
+        return Err(Error::Other("lower_bounds has the wrong size".into()));
+    }
 
     let n_observed = observed_indices.len();
     let n_stats = n_observed * (n_observed + 1) / 2;
@@ -1470,14 +1457,10 @@ fn fit_ram_dwls(
     let sample_cov = from_col_major(&sample_cov_values, n_observed, n_observed);
     let wls_v = from_col_major(&wls_values, n_stats, n_stats);
     let observed = vech(&sample_cov);
-    let variance_mask = covariance_variance_free_mask(
-        &lhs_index,
-        &rhs_index,
-        &op_code,
-        &free_index,
-        initial_free_values.len(),
-    );
     let mut params = DVector::from_vec(initial_free_values);
+    for (idx, lower_bound) in lower_bounds.iter().enumerate() {
+        params[idx] = params[idx].max(*lower_bound);
+    }
     let mut damping = 1e-6;
     let mut converged = false;
     let mut iterations = 0;
@@ -1514,10 +1497,8 @@ fn fit_ram_dwls(
         let old_objective = 0.5 * residual.dot(&(&wls_v * &residual));
         let mut next_params = &params + &step;
 
-        for (idx, should_clamp) in variance_mask.iter().enumerate() {
-            if *should_clamp {
-                next_params[idx] = next_params[idx].max(1e-10);
-            }
+        for (idx, lower_bound) in lower_bounds.iter().enumerate() {
+            next_params[idx] = next_params[idx].max(*lower_bound);
         }
 
         let next_implied = ram_implied_from_rows(

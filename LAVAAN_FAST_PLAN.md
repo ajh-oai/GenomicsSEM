@@ -70,13 +70,48 @@ the compiler seam before moving solvers onto it.
    - next: profile real broader fits before pursuing more local optimizer
      micro-optimizations
 5. Add parser support for a larger syntax subset:
-   - fixed coefficients
-   - labels
-   - residual covariances
-   - direct effects
-6. Add parameter-table equality reuse, then decide whether inequality
-   constraints and `:=` belong in the same generic layer or a later symbolic
-   layer.
+   - done: explicit RAM strings using `=~`, `~`, and `~~`
+   - done: fixed coefficients, `NA*`, `start()`, labels/equality reuse,
+     residual covariances, direct effects, and simple labeled lower bounds
+   - next: lavaan-style auto expansion for omitted variances/residuals and
+     generic `std.lv` behavior
+6. Extend the symbolic layer only where GenomicSEM needs it next:
+   - done: equality reuse via repeated labels
+   - done: simple lower-bound constraints
+   - next: decide whether `:=` and richer nonlinear constraints belong in the
+     same generic layer or a later symbolic layer.
+
+## Current parser boundary
+
+The generic string path now accepts fully explicit RAM-style models such as:
+
+```text
+F1 =~ 1*A + l2*B + l3*C
+F1 ~ beta*SNP
+A ~ direct*SNP
+B ~ direct*SNP
+A ~~ rvA*A
+B ~~ rvB*B
+C ~~ rvC*C
+F1 ~~ psi*F1
+SNP ~~ 0.42*SNP
+rvA > .001
+```
+
+That covers multi-factor/direct-effect model strings once the user has made the
+RAM model explicit. It intentionally does not yet reproduce lavaan's automatic
+model expansion. For the generic path, every observed and latent variable still
+needs an explicit diagonal variance row.
+
+The main remaining gaps to broad GenomicSEM workflow coverage are:
+
+1. auto-generated variances/residuals and generic `std.lv` handling for shorthand
+   syntax such as `F1 =~ A + B + C`
+2. user-defined parameters via `:=`
+3. broader nonlinear/equality constraint syntax beyond repeated labels and
+   simple lower bounds
+4. non-DWLS estimators and the wider parts of lavaan outside the RAM covariance
+   subset
 
 The decision point after that is whether `lavaan_fast` remains a compiler that
 feeds a few specialized kernels plus a generic fallback, or becomes the front

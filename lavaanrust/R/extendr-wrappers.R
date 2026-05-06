@@ -105,10 +105,11 @@ evaluate_ram_surfaces <- function(lhs_index, rhs_index, op_code, free_index, fix
 #' @param observed_index Observed-variable indices in the full RAM system.
 #' @param free_row_offsets Offsets into `free_row_indices` for each free parameter.
 #' @param free_row_indices Flattened 1-based row indices grouped by free parameter.
+#' @param lower_bounds Lower bound for each free parameter.
 #' @param n_variables Number of variables in the full RAM system.
 #' @param max_iter Maximum optimizer iterations.
 #' @param tol Convergence tolerance.
 #' @export
-fit_ram_dwls <- function(sample_cov, wls_v, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, free_row_offsets, free_row_indices, n_variables, max_iter, tol) .Call(wrap__fit_ram_dwls, sample_cov, wls_v, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, free_row_offsets, free_row_indices, n_variables, max_iter, tol)
+fit_ram_dwls <- function(sample_cov, wls_v, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, free_row_offsets, free_row_indices, lower_bounds, n_variables, max_iter, tol) .Call(wrap__fit_ram_dwls, sample_cov, wls_v, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, free_row_offsets, free_row_indices, lower_bounds, n_variables, max_iter, tol)
 
 # nolint end

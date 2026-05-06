@@ -829,3 +829,57 @@ the dominant cost.
    - parser/model-string support for a broader syntax subset
    - or a reusable native compiled plan if repeated surface evaluation proves
      material in a real workflow rather than only in microbenchmarks
+
+## 2026-05-06 14:05 PDT
+
+### Generic model-string compiler
+
+- Added a generic parser that lowers explicit lavaan-style RAM strings directly
+  into the existing parameter-table compiler path.
+- Supported string syntax now includes:
+  - `=~`, `~`, and `~~`
+  - multiple right-hand-side terms separated by `+`
+  - fixed numeric coefficients
+  - `NA*` free markers
+  - `start(value)*` modifiers
+  - labels with equality reuse across rows
+  - repeated same-edge modifier declarations such as
+    `NA*A + start(.1)*A`
+  - simple labeled lower bounds such as `rvA > .001`
+- Kept the first generic string path deliberately explicit:
+  - every observed and latent variable must still have an explicit diagonal
+    variance row
+  - shorthand models that rely on lavaan `auto.*` expansion remain unsupported
+    until that behavior is implemented intentionally
+- Generic string models now route through `sem_rust()` into the native RAM
+  fitter without first requiring a hand-built parameter table.
+
+### Validation
+
+- Added parser regressions for modifiers, repeated terms, lower bounds, and
+  generic direct-effect string fitting.
+- Added a one-parameter constrained fit showing that `A ~~ rvA*A` plus
+  `rvA > 1.5` is enforced by the native optimizer.
+- Local package validation:
+  - `R CMD INSTALL lavaanrust`
+  - `Rscript -e 'testthat::test_dir("lavaanrust/tests/testthat")'`
+  - result: `74` passing tests
+
+### Coverage significance
+
+This is the first point where broader user-authored model strings can reach the
+generic Rust backend directly rather than only through handwritten specialized
+parsers or preconstructed parameter tables.
+
+The largest remaining gaps are now clearer:
+
+1. lavaan-style automatic model expansion for omitted residual/latent variances
+   and generic `std.lv` semantics
+2. user-defined parameters via `:=`
+3. richer symbolic constraints beyond repeated labels and simple lower bounds
+4. everything outside the current DWLS covariance/RAM subset
+
+For GenomicSEM-oriented coverage, items 1-3 are the important remaining front-end
+work. Full lavaan parity is substantially larger than that and would include
+means/intercepts, additional estimators, categorical machinery, groups, and much
+more of lavaan's option surface.

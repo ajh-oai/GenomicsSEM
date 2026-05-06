@@ -107,6 +107,27 @@
     paste0(par_table$lhs[[row_idx]], par_table$op[[row_idx]], par_table$rhs[[row_idx]])
   }, character(1L))
   stat_names <- .stat_names(observed_names)
+  row_lower_bounds <- if ("lower" %in% names(par_table)) {
+    as.double(par_table$lower)
+  } else {
+    rep(NA_real_, nrow(par_table))
+  }
+  free_lower_bounds <- vapply(seq_along(free_ids), function(free_position) {
+    rows <- free_row_groups[[free_position]]
+    lower <- -Inf
+
+    if (any(op_code[rows] == 3L & lhs_index[rows] == rhs_index[rows])) {
+      lower <- 1e-10
+    }
+
+    explicit <- row_lower_bounds[rows]
+    explicit <- explicit[is.finite(explicit)]
+    if (length(explicit)) {
+      lower <- max(c(lower, explicit))
+    }
+
+    lower
+  }, numeric(1L))
 
   structure(
     list(
@@ -129,6 +150,7 @@
       free_row_offsets = as.integer(free_row_offsets),
       free_row_indices = free_row_indices,
       free_labels = free_labels,
+      free_lower_bounds = free_lower_bounds,
       stat_names = stat_names,
       n_variables = length(variable_names),
       n_observed = length(observed_names),
@@ -292,6 +314,7 @@
     compiled$observed_index,
     compiled$free_row_offsets,
     compiled$free_row_indices,
+    as.double(compiled$free_lower_bounds),
     as.integer(compiled$n_variables),
     as.integer(max_iter),
     tol
