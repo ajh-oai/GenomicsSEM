@@ -931,3 +931,50 @@ Beyond those, reaching full lavaan coverage would still require a much larger
 surface: means/intercepts, additional estimators, categorical machinery,
 multi-group behavior, and other option families outside the current DWLS
 covariance subset.
+
+## 2026-05-06 14:40 PDT
+
+### Generic defined parameters
+
+- Added generic `:=` support on top of the RAM compiler without changing the
+  native solve itself:
+  - structural rows still compile into the RAM system
+  - defined rows stay symbolic and are evaluated from labeled fitted parameters
+  - supported expressions currently cover `+`, `-`, `*`, `/`, `^`, `sqrt()`,
+    `exp()`, and `log()`
+- Added a minimal `lavaan_rust_model` compatibility object for generic fits so
+  unchanged GenomicSEM code can keep using `fit@Model@def.function`.
+- Implemented:
+  - `lav_model_get_parameters_rust()`
+  - `lav_func_jacobian_complex_rust()`
+- Extended generic `standardizedSolution_rust()` so defined parameters are
+  re-evaluated from standardized labeled estimates.
+- Tolerated row-only named covariance matrices during generic parsing. This
+  matches a real `usermodel()` standardized-fit intermediate where lavaan works
+  with row names even though column names have been dropped.
+
+### Validation
+
+- Added regressions for:
+  - nested defined-parameter evaluation and model reuse
+  - complex-step Jacobians used by GenomicSEM's delta-method SE code
+  - unsupported defined-expression rejection
+  - row-only covariance names
+  - generic standardized output with re-evaluated defined parameters
+- Local package validation:
+  - `R CMD INSTALL lavaanrust`
+  - `Rscript -e 'testthat::test_dir("lavaanrust/tests/testthat")'`
+  - result: `98` passing tests
+- End-to-end smoke:
+  - `usermodel_rust()` now completes for a labeled one-factor model with
+    `omega := l2 * l3`
+  - the output contains unstandardized, `STD_Genotype`, and `STD_All` values for
+    the defined parameter.
+  - max absolute old-vs-rust difference across those defined-parameter outputs:
+    `5.78e-08`
+
+### Coverage significance
+
+This closes the largest remaining front-end gap for ordinary user-authored DWLS
+RAM models. The next meaningful symbolic gap is richer constraint syntax, not
+basic model-string coverage.

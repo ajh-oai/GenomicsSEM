@@ -18,6 +18,31 @@ methods::setClass(
     model_kind = "character",
     Options = "list",
     Data = "list",
-    Model = "list"
+    Model = "ANY"
   )
+)
+
+#' Minimal compatibility model object for generic RAM fits.
+#'
+#' @exportClass lavaan_rust_model
+methods::setClass(
+  "lavaan_rust_model",
+  slots = c(
+    model_kind = "character",
+    par_table = "data.frame",
+    free_values = "numeric",
+    def.function = "function"
+  )
+)
+
+methods::setMethod(
+  "$",
+  "lavaan_rust_model",
+  function(x, name) {
+    if (!name %in% methods::slotNames(x)) {
+      stop("Unknown lavaan_rust_model field: ", name, call. = FALSE)
+    }
+
+    methods::slot(x, name)
+  }
 )

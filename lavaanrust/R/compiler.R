@@ -37,7 +37,7 @@
     stop("lavaan_fast compiler requires non-empty observed variable names.", call. = FALSE)
   }
 
-  supported_rows <- par_table$op %in% c("=~", "~", "~~")
+  supported_rows <- par_table$op %in% c("=~", "~", "~~", ":=")
   if (!all(supported_rows)) {
     stop(
       sprintf(
@@ -48,42 +48,53 @@
     )
   }
 
-  latent_names <- unique(par_table$lhs[par_table$op == "=~"])
-  variable_names <- unique(c(observed_names, latent_names, par_table$lhs, par_table$rhs))
+  structural_row_indices <- which(par_table$op != ":=")
+  if (!length(structural_row_indices)) {
+    stop("lavaan_fast compiler requires at least one structural row.", call. = FALSE)
+  }
+  structural_par_table <- par_table[structural_row_indices, , drop = FALSE]
+
+  latent_names <- unique(structural_par_table$lhs[structural_par_table$op == "=~"])
+  variable_names <- unique(c(
+    observed_names,
+    latent_names,
+    structural_par_table$lhs,
+    structural_par_table$rhs
+  ))
 
   unknown_observed <- setdiff(observed_names, variable_names)
   if (length(unknown_observed)) {
     stop("lavaan_fast compiler observed variables must appear in the parameter table.", call. = FALSE)
   }
 
-  free_ids <- sort(unique(as.integer(par_table$free[par_table$free > 0L])))
-  free_index <- match(as.integer(par_table$free), free_ids)
-  free_index[par_table$free <= 0L] <- NA_integer_
+  free_ids <- sort(unique(as.integer(structural_par_table$free[structural_par_table$free > 0L])))
+  free_index <- match(as.integer(structural_par_table$free), free_ids)
+  free_index[structural_par_table$free <= 0L] <- NA_integer_
   default_free_values <- vapply(
     free_ids,
     function(free_id) {
-      rows <- which(par_table$free == free_id)
+      rows <- which(structural_par_table$free == free_id)
       .lavaan_fast_value(c(
-        par_table$est[rows],
-        par_table$ustart[rows],
-        par_table$start[rows]
+        structural_par_table$est[rows],
+        structural_par_table$ustart[rows],
+        structural_par_table$start[rows]
       ))
     },
     numeric(1L)
   )
 
-  lhs_index <- match(par_table$lhs, variable_names)
-  rhs_index <- match(par_table$rhs, variable_names)
-  fixed_values <- vapply(seq_len(nrow(par_table)), function(row_idx) {
+  lhs_index <- match(structural_par_table$lhs, variable_names)
+  rhs_index <- match(structural_par_table$rhs, variable_names)
+  fixed_values <- vapply(seq_len(nrow(structural_par_table)), function(row_idx) {
     if (!is.na(free_index[[row_idx]])) {
       return(NA_real_)
     }
 
-    .lavaan_fast_row_value(par_table, row_idx)
+    .lavaan_fast_row_value(structural_par_table, row_idx)
   }, numeric(1L))
 
-  row_kind <- ifelse(par_table$op %in% c("=~", "~"), "A", "S")
-  op_code <- match(par_table$op, c("=~", "~", "~~"))
+  row_kind <- ifelse(structural_par_table$op %in% c("=~", "~"), "A", "S")
+  op_code <- match(structural_par_table$op, c("=~", "~", "~~"))
   edge_key <- paste(row_kind, lhs_index, rhs_index, sep = ":")
   duplicated_edges <- duplicated(edge_key) & row_kind == "A"
   if (any(duplicated_edges)) {
@@ -104,13 +115,17 @@
   free_row_indices <- as.integer(unlist(free_row_groups, use.names = FALSE))
   free_labels <- vapply(seq_along(free_ids), function(free_position) {
     row_idx <- free_row_groups[[free_position]][[1L]]
-    paste0(par_table$lhs[[row_idx]], par_table$op[[row_idx]], par_table$rhs[[row_idx]])
+    paste0(
+      structural_par_table$lhs[[row_idx]],
+      structural_par_table$op[[row_idx]],
+      structural_par_table$rhs[[row_idx]]
+    )
   }, character(1L))
   stat_names <- .stat_names(observed_names)
-  row_lower_bounds <- if ("lower" %in% names(par_table)) {
-    as.double(par_table$lower)
+  row_lower_bounds <- if ("lower" %in% names(structural_par_table)) {
+    as.double(structural_par_table$lower)
   } else {
-    rep(NA_real_, nrow(par_table))
+    rep(NA_real_, nrow(structural_par_table))
   }
   free_lower_bounds <- vapply(seq_along(free_ids), function(free_position) {
     rows <- free_row_groups[[free_position]]
@@ -134,7 +149,9 @@
       observed_names = observed_names,
       latent_names = latent_names,
       variable_names = variable_names,
-      par_table = as.data.frame(par_table, stringsAsFactors = FALSE),
+      par_table = as.data.frame(structural_par_table, stringsAsFactors = FALSE),
+      structural_row_indices = as.integer(structural_row_indices),
+      defined_row_indices = as.integer(which(par_table$op == ":=")),
       row_kind = row_kind,
       op_code = op_code,
       lhs_index = lhs_index,

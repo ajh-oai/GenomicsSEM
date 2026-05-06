@@ -151,6 +151,248 @@
   )
 }
 
+.lavaan_fast_allowed_definition_calls <- c("+", "-", "*", "/", "^", "(", "sqrt", "exp", "log")
+
+.lavaan_fast_validate_definition_expression <- function(expr, allowed_symbols) {
+  if (is.numeric(expr) || is.complex(expr)) {
+    return(length(expr) == 1L)
+  }
+
+  if (is.name(expr)) {
+    return(as.character(expr) %in% allowed_symbols)
+  }
+
+  if (!is.call(expr)) {
+    return(FALSE)
+  }
+
+  call_name <- as.character(expr[[1L]])
+  if (!call_name %in% .lavaan_fast_allowed_definition_calls) {
+    return(FALSE)
+  }
+
+  args <- as.list(expr)[-1L]
+  if (call_name %in% c("sqrt", "exp", "log", "(") && length(args) != 1L) {
+    return(FALSE)
+  }
+  if (call_name %in% c("*", "/", "^") && length(args) != 2L) {
+    return(FALSE)
+  }
+  if (call_name %in% c("+", "-") && !length(args) %in% c(1L, 2L)) {
+    return(FALSE)
+  }
+
+  all(vapply(
+    args,
+    .lavaan_fast_validate_definition_expression,
+    logical(1L),
+    allowed_symbols = allowed_symbols
+  ))
+}
+
+.lavaan_fast_parse_definition <- function(line) {
+  definition_match <- regexec(
+    "^([A-Za-z.][A-Za-z0-9_.]*)\\s*:=\\s*(.+)$",
+    line
+  )
+  definition_parts <- regmatches(line, definition_match)[[1L]]
+  if (!length(definition_parts)) {
+    return(NULL)
+  }
+
+  expr_text <- gsub("[[:space:]]+", "", definition_parts[[3L]])
+  parsed <- tryCatch(parse(text = expr_text, keep.source = FALSE), error = function(e) NULL)
+  if (is.null(parsed) || length(parsed) != 1L) {
+    return(NULL)
+  }
+
+  list(
+    lhs = definition_parts[[2L]],
+    rhs = expr_text,
+    expr = parsed[[1L]]
+  )
+}
+
+.lavaan_fast_append_defined_rows <- function(par_table, definitions) {
+  if (!length(definitions)) {
+    return(par_table)
+  }
+
+  available_symbols <- unique(par_table$label[nzchar(par_table$label)])
+  seen_definitions <- character()
+  rows <- vector("list", length(definitions))
+  for (idx in seq_along(definitions)) {
+    definition <- definitions[[idx]]
+    if (
+      definition$lhs %in% available_symbols ||
+        definition$lhs %in% seen_definitions ||
+        !.lavaan_fast_validate_definition_expression(definition$expr, available_symbols)
+    ) {
+      return(NULL)
+    }
+
+    row_idx <- nrow(par_table) + idx
+    rows[[idx]] <- data.frame(
+      id = row_idx,
+      lhs = definition$lhs,
+      op = ":=",
+      rhs = definition$rhs,
+      user = 1L,
+      block = 1L,
+      group = 1L,
+      free = 0L,
+      ustart = NA_real_,
+      exo = 0L,
+      label = definition$lhs,
+      lower = NA_real_,
+      plabel = "",
+      start = 0,
+      est = 0,
+      se = 0,
+      stringsAsFactors = FALSE
+    )
+    available_symbols <- c(available_symbols, definition$lhs)
+    seen_definitions <- c(seen_definitions, definition$lhs)
+  }
+
+  rbind(par_table, do.call(rbind, rows))
+}
+
+.lavaan_fast_definition_plan <- function(par_table, compiled) {
+  defined_rows <- which(par_table$op == ":=")
+  if (!length(defined_rows)) {
+    return(list(
+      rows = integer(),
+      def.function = function(x) numeric()
+    ))
+  }
+
+  structural_rows <- which(par_table$op != ":=")
+  label_rows <- structural_rows[nzchar(par_table$label[structural_rows])]
+  label_info <- split(label_rows, par_table$label[label_rows])
+  free_positions <- setNames(integer(length(label_info)), names(label_info))
+  fixed_values <- setNames(numeric(length(label_info)), names(label_info))
+  for (label in names(label_info)) {
+    rows <- label_info[[label]]
+    free_ids <- unique(par_table$free[rows][par_table$free[rows] > 0L])
+    if (length(free_ids) > 1L) {
+      stop("Defined-parameter label maps to multiple free parameters: ", label, call. = FALSE)
+    }
+
+    if (length(free_ids) == 1L) {
+      free_position <- match(free_ids[[1L]], compiled$free_ids)
+      if (is.na(free_position)) {
+        stop("Defined-parameter label is not present in the compiled free vector: ", label, call. = FALSE)
+      }
+      free_positions[[label]] <- free_position
+      fixed_values[[label]] <- NA_real_
+    } else {
+      free_positions[[label]] <- 0L
+      fixed_values[[label]] <- .lavaan_fast_row_value(par_table, rows[[1L]])
+    }
+  }
+
+  available_symbols <- names(label_info)
+  expressions <- vector("list", length(defined_rows))
+  names(expressions) <- par_table$lhs[defined_rows]
+  if (anyDuplicated(names(expressions)) || any(names(expressions) %in% available_symbols)) {
+    stop("Defined-parameter names must be unique and distinct from structural labels.", call. = FALSE)
+  }
+
+  for (idx in seq_along(defined_rows)) {
+    row_idx <- defined_rows[[idx]]
+    parsed <- tryCatch(parse(text = par_table$rhs[[row_idx]], keep.source = FALSE), error = function(e) NULL)
+    if (
+      is.null(parsed) ||
+        length(parsed) != 1L ||
+        !.lavaan_fast_validate_definition_expression(parsed[[1L]], available_symbols)
+    ) {
+      stop("Unsupported defined-parameter expression: ", par_table$rhs[[row_idx]], call. = FALSE)
+    }
+
+    expressions[[idx]] <- parsed[[1L]]
+    available_symbols <- c(available_symbols, par_table$lhs[[row_idx]])
+  }
+
+  def_function <- local({
+    label_free_positions <- free_positions
+    label_fixed_values <- fixed_values
+    definition_expressions <- expressions
+    expected_free <- length(compiled$free_ids)
+
+    function(x) {
+      if (length(x) != expected_free) {
+        stop("Defined-parameter evaluator received the wrong free-vector length.", call. = FALSE)
+      }
+
+      env <- new.env(parent = baseenv())
+      for (label in names(label_free_positions)) {
+        free_position <- label_free_positions[[label]]
+        value <- if (free_position > 0L) x[[free_position]] else label_fixed_values[[label]]
+        assign(label, value, envir = env)
+      }
+
+      values <- vector("list", length(definition_expressions))
+      names(values) <- names(definition_expressions)
+      for (idx in seq_along(definition_expressions)) {
+        value <- eval(definition_expressions[[idx]], envir = env)
+        if (
+          length(value) != 1L ||
+            !(is.numeric(value) || is.complex(value))
+        ) {
+          stop("Defined-parameter expression did not evaluate to a scalar number.", call. = FALSE)
+        }
+
+        values[[idx]] <- value
+        assign(names(definition_expressions)[[idx]], value, envir = env)
+      }
+
+      unlist(values, use.names = TRUE)
+    }
+  })
+
+  list(
+    rows = defined_rows,
+    def.function = def_function
+  )
+}
+
+.lavaan_fast_evaluate_defined_from_labels <- function(par_table, label_values) {
+  defined_rows <- which(par_table$op == ":=")
+  if (!length(defined_rows)) {
+    return(numeric())
+  }
+
+  available_symbols <- names(label_values)
+  env <- list2env(as.list(label_values), parent = baseenv())
+  values <- setNames(vector("list", length(defined_rows)), par_table$lhs[defined_rows])
+  for (idx in seq_along(defined_rows)) {
+    row_idx <- defined_rows[[idx]]
+    parsed <- tryCatch(parse(text = par_table$rhs[[row_idx]], keep.source = FALSE), error = function(e) NULL)
+    if (
+      is.null(parsed) ||
+        length(parsed) != 1L ||
+        !.lavaan_fast_validate_definition_expression(parsed[[1L]], available_symbols)
+    ) {
+      stop("Unsupported defined-parameter expression: ", par_table$rhs[[row_idx]], call. = FALSE)
+    }
+
+    value <- eval(parsed[[1L]], envir = env)
+    if (
+      length(value) != 1L ||
+        !(is.numeric(value) || is.complex(value))
+    ) {
+      stop("Defined-parameter expression did not evaluate to a scalar number.", call. = FALSE)
+    }
+
+    values[[idx]] <- value
+    assign(par_table$lhs[[row_idx]], value, envir = env)
+    available_symbols <- c(available_symbols, par_table$lhs[[row_idx]])
+  }
+
+  unlist(values, use.names = TRUE)
+}
+
 .lavaan_fast_default_start <- function(op, lhs, rhs, observed_names, sample_cov) {
   if (identical(op, "=~")) {
     return(1)
@@ -394,18 +636,35 @@
   if (is.null(observed_names)) {
     return(NULL)
   }
+  if (is.null(colnames(sample_cov))) {
+    colnames(sample_cov) <- observed_names
+  }
+  if (is.null(rownames(sample_cov))) {
+    rownames(sample_cov) <- observed_names
+  }
 
   lines <- trimws(strsplit(model, "\n", fixed = TRUE)[[1L]])
   lines <- trimws(sub("#.*$", "", lines))
   lines <- lines[nzchar(lines)]
 
-  if (!length(lines) || any(grepl("(:=|==|<)", lines))) {
+  if (!length(lines) || any(grepl("(==|<)", lines))) {
     return(NULL)
   }
 
   rows <- list()
+  definitions <- list()
   lower_bounds <- numeric()
   for (line in lines) {
+    definition <- .lavaan_fast_parse_definition(line)
+    if (!is.null(definition)) {
+      definitions[[length(definitions) + 1L]] <- definition
+      next
+    }
+
+    if (grepl(":=", line, fixed = TRUE)) {
+      return(NULL)
+    }
+
     constraint_match <- regexec(
       "^([A-Za-z.][A-Za-z0-9_.]*)\\s*>\\s*([+-]?(?:[0-9]*\\.?[0-9]+)(?:[eE][+-]?[0-9]+)?)$",
       line
@@ -533,7 +792,7 @@
     )
   }
 
-  do.call(rbind, par_rows)
+  .lavaan_fast_append_defined_rows(do.call(rbind, par_rows), definitions)
 }
 
 .one_factor_latent_name <- function(model) {
@@ -1747,9 +2006,14 @@
   par_table <- as.data.frame(par_table, stringsAsFactors = FALSE)
   rownames(par_table) <- NULL
   free_rows <- which(!is.na(compiled$free_index))
-  par_table$est[free_rows] <- fit$estimates[compiled$free_index[free_rows]]
+  full_free_rows <- compiled$structural_row_indices[free_rows]
+  par_table$est[full_free_rows] <- fit$estimates[compiled$free_index[free_rows]]
   par_table$se[] <- 0
-  par_table$se[free_rows] <- fit$naive_se[compiled$free_index[free_rows]]
+  par_table$se[full_free_rows] <- fit$naive_se[compiled$free_index[free_rows]]
+  definition_plan <- .lavaan_fast_definition_plan(par_table, compiled)
+  if (length(definition_plan$rows)) {
+    par_table$est[definition_plan$rows] <- Re(definition_plan$def.function(fit$estimates))
+  }
   npar <- length(compiled$free_ids)
   fit_stats <- c(
     npar = npar,
@@ -1776,7 +2040,13 @@
     model_kind = "ram_dwls_generic",
     Options = list(estimator = "DWLS"),
     Data = list(observed_names = compiled$observed_names),
-    Model = list(model_kind = "ram_dwls_generic", par_table = par_table)
+    Model = methods::new(
+      "lavaan_rust_model",
+      model_kind = "ram_dwls_generic",
+      par_table = par_table,
+      free_values = as.double(fit$estimates),
+      def.function = definition_plan$def.function
+    )
   )
 }
 
@@ -1975,13 +2245,13 @@ lavaan_rust <- function(sample.cov, WLS.V = NULL, slotOptions = NULL, slotParTab
   }
 
   if (
-    is.list(slotModel) &&
-      identical(slotModel$model_kind, "ram_dwls_generic") &&
-      is.data.frame(slotModel$par_table) &&
+    methods::is(slotModel, "lavaan_rust_model") &&
+      identical(slotModel@model_kind, "ram_dwls_generic") &&
+      is.data.frame(slotModel@par_table) &&
       is.matrix(sample.cov) &&
       is.matrix(WLS.V)
   ) {
-    return(.fit_lavaan_fast_ram_model(slotModel$par_table, sample.cov, WLS.V))
+    return(.fit_lavaan_fast_ram_model(slotModel@par_table, sample.cov, WLS.V))
   }
 
   stop(
@@ -2084,6 +2354,62 @@ standardizedSolution_rust <- function(object, ...) {
     stop("standardizedSolution_rust() only supports lavaan_rust_fit objects.", call. = FALSE)
   }
 
+  if (identical(object@model_kind, "ram_dwls_generic")) {
+    par_table <- object@ParTable
+    compiled <- .lavaan_fast_compile_par_table(par_table, object@observed_names)
+    free_values <- lav_model_get_parameters_rust(object@Model, type = "free")
+    matrices <- .lavaan_fast_ram_matrices(compiled, free_values)
+    inverse <- solve(diag(nrow(matrices$A)) - matrices$A)
+    full_implied <- inverse %*% matrices$S %*% t(inverse)
+    variable_sd <- sqrt(diag(full_implied))
+    names(variable_sd) <- compiled$variable_names
+
+    est.std <- par_table$est
+    structural_rows <- which(par_table$op != ":=")
+    for (row_idx in structural_rows) {
+      lhs <- par_table$lhs[[row_idx]]
+      rhs <- par_table$rhs[[row_idx]]
+      op <- par_table$op[[row_idx]]
+
+      est.std[[row_idx]] <- if (identical(op, "=~")) {
+        par_table$est[[row_idx]] * variable_sd[[lhs]] / variable_sd[[rhs]]
+      } else if (identical(op, "~")) {
+        par_table$est[[row_idx]] * variable_sd[[rhs]] / variable_sd[[lhs]]
+      } else {
+        par_table$est[[row_idx]] / (variable_sd[[lhs]] * variable_sd[[rhs]])
+      }
+    }
+
+    label_rows <- structural_rows[nzchar(par_table$label[structural_rows])]
+    label_values <- setNames(est.std[label_rows], par_table$label[label_rows])
+    label_values <- label_values[!duplicated(names(label_values))]
+    defined_rows <- which(par_table$op == ":=")
+    if (length(defined_rows)) {
+      est.std[defined_rows] <- Re(.lavaan_fast_evaluate_defined_from_labels(par_table, label_values))
+    }
+
+    latent_variance_rows <- which(
+      par_table$op == "~~" &
+        par_table$lhs %in% compiled$latent_names &
+        par_table$lhs == par_table$rhs
+    )
+    pvalue <- rep(0, nrow(par_table))
+    pvalue[latent_variance_rows] <- NA_real_
+
+    return(data.frame(
+      lhs = par_table$lhs,
+      op = par_table$op,
+      rhs = par_table$rhs,
+      est.std = est.std,
+      se = rep(0, nrow(par_table)),
+      z = rep(NA_real_, nrow(par_table)),
+      pvalue = pvalue,
+      ci.lower = est.std,
+      ci.upper = est.std,
+      stringsAsFactors = FALSE
+    ))
+  }
+
   if (!object@model_kind %in% c("marker_one_factor_dwls", "one_factor_dwls", "simple_std_lv_one_factor_dwls")) {
     stop("Unsupported standardizedSolution_rust() model path.", call. = FALSE)
   }
@@ -2126,16 +2452,44 @@ standardizedSolution_rust <- function(object, ...) {
 
 #' Rust-backed experimental replacement for lavaan's parameter extractor.
 #'
-#' @param ... Reserved for a future compatible implementation.
+#' @param object A `lavaan_rust_model` object.
+#' @param type Parameter type. Only `"free"` is currently supported.
 #' @export
-lav_model_get_parameters_rust <- function(...) {
-  stop("lav_model_get_parameters_rust() is not implemented yet.", call. = FALSE)
+lav_model_get_parameters_rust <- function(object, type = "free", ...) {
+  if (!methods::is(object, "lavaan_rust_model")) {
+    stop("lav_model_get_parameters_rust() only supports lavaan_rust_model objects.", call. = FALSE)
+  }
+
+  if (!identical(type, "free")) {
+    stop("lav_model_get_parameters_rust() currently supports type = \"free\" only.", call. = FALSE)
+  }
+
+  object@free_values
 }
 
 #' Rust-backed experimental replacement for lavaan's complex-step Jacobian.
 #'
-#' @param ... Reserved for a future compatible implementation.
+#' @param func Defined-parameter function.
+#' @param x Free-parameter vector.
 #' @export
-lav_func_jacobian_complex_rust <- function(...) {
-  stop("lav_func_jacobian_complex_rust() is not implemented yet.", call. = FALSE)
+lav_func_jacobian_complex_rust <- function(func, x, ...) {
+  if (!is.function(func) || !is.numeric(x)) {
+    stop("lav_func_jacobian_complex_rust() expects a function and numeric vector.", call. = FALSE)
+  }
+
+  baseline <- func(x)
+  jacobian <- matrix(
+    0,
+    nrow = length(baseline),
+    ncol = length(x),
+    dimnames = list(names(baseline), names(x))
+  )
+  step <- 1e-20
+  for (idx in seq_along(x)) {
+    perturbed <- as.complex(x)
+    perturbed[[idx]] <- perturbed[[idx]] + 1i * step
+    jacobian[, idx] <- Im(func(perturbed)) / step
+  }
+
+  jacobian
 }

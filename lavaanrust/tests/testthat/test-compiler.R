@@ -214,6 +214,15 @@ test_that("lavaan_fast generic parser auto-expands exogenous observed covariance
   expect_equal(parsed$start[match(c("X1~~X1", "X2~~X2", "X1~~X2"), row_names)], c(0.4, 0.6, 0.12))
 })
 
+test_that("lavaan_fast generic parser tolerates row-only covariance names", {
+  sample_cov <- diag(c(1, 1.2, 0.9))
+  rownames(sample_cov) <- c("A", "B", "C")
+  model <- "F1 =~ A + B + C"
+  parsed <- lavaanrust:::.lavaan_fast_parse_model_string(model, sample_cov, std.lv = FALSE)
+
+  expect_equal(parsed$start[4:6], c(0.5, 0.6, 0.45))
+})
+
 test_that("lavaan_fast generic shorthand strings fit through the native RAM path", {
   sample_cov <- diag(c(1, 1.2, 0.9, 1.1, 0.8, 1.3))
   dimnames(sample_cov) <- list(c("A", "B", "C", "D", "E", "F"), c("A", "B", "C", "D", "E", "F"))
@@ -237,7 +246,84 @@ test_that("lavaan_fast generic shorthand strings fit through the native RAM path
   expect_equal(dim(lavaanrust::lavInspect_rust(fit, "cor.lv")), c(2L, 2L))
 })
 
-test_that("lavaan_fast compiler rejects syntax outside the first RAM subset", {
+test_that("lavaan_fast generic string path evaluates defined parameters", {
+  sample_cov <- matrix(
+    c(0.999, 0.3996, 0.3996, 0.99884),
+    nrow = 2L,
+    dimnames = list(c("X", "Y"), c("X", "Y"))
+  )
+  model <- paste(
+    "Y ~ start(.4)*b*X",
+    "X ~~ start(.999)*vx*X",
+    "Y ~~ start(.839)*vy*Y",
+    "ind := b * vx",
+    "ratio := ind / vy",
+    sep = "\n"
+  )
+  fit <- lavaanrust::sem_rust(
+    model,
+    sample.cov = sample_cov,
+    estimator = "DWLS",
+    WLS.V = diag(3)
+  )
+  refit <- lavaanrust::lavaan_rust(
+    sample.cov = sample_cov,
+    WLS.V = diag(3),
+    slotOptions = fit@Options,
+    slotParTable = fit@ParTable,
+    slotData = fit@Data,
+    slotModel = fit@Model
+  )
+  par_table <- lavaanrust::parTable_rust(fit)
+  defined_rows <- which(par_table$op == ":=")
+  free_values <- lavaanrust::lav_model_get_parameters_rust(fit@Model, type = "free")
+  jacobian <- lavaanrust::lav_func_jacobian_complex_rust(fit@Model@def.function, free_values)
+
+  expect_s4_class(fit@Model, "lavaan_rust_model")
+  expect_equal(par_table$lhs[defined_rows], c("ind", "ratio"))
+  expect_equal(par_table$rhs[defined_rows], c("b*vx", "ind/vy"))
+  expect_equal(
+    par_table$est[defined_rows],
+    c(
+      free_values[[1L]] * free_values[[2L]],
+      free_values[[1L]] * free_values[[2L]] / free_values[[3L]]
+    ),
+    tolerance = 1e-10
+  )
+  expect_equal(
+    unname(jacobian),
+    rbind(
+      c(free_values[[2L]], free_values[[1L]], 0),
+      c(
+        free_values[[2L]] / free_values[[3L]],
+        free_values[[1L]] / free_values[[3L]],
+        -(free_values[[1L]] * free_values[[2L]]) / free_values[[3L]]^2
+      )
+    ),
+    tolerance = 1e-10
+  )
+  expect_equal(
+    lavaanrust::parTable_rust(refit)$est[defined_rows],
+    par_table$est[defined_rows],
+    tolerance = 1e-10
+  )
+})
+
+test_that("lavaan_fast generic parser rejects unsupported defined expressions", {
+  sample_cov <- diag(c(1, 1))
+  dimnames(sample_cov) <- list(c("X", "Y"), c("X", "Y"))
+  model <- paste(
+    "Y ~ b*X",
+    "X ~~ vx*X",
+    "Y ~~ vy*Y",
+    "bad := system('echo nope')",
+    sep = "\n"
+  )
+
+  expect_null(lavaanrust:::.lavaan_fast_parse_model_string(model, sample_cov))
+})
+
+test_that("lavaan_fast compiler rejects unsupported operators", {
   fixture <- user_gwas_fixture()
   par_table <- fixture$fixed_model
   par_table <- rbind(
@@ -245,7 +331,7 @@ test_that("lavaan_fast compiler rejects syntax outside the first RAM subset", {
     transform(
       par_table[1L, , drop = FALSE],
       lhs = "ghost",
-      op = ":=",
+      op = "==",
       rhs = "F1~SNP",
       free = 0L
     )

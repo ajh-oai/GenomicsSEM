@@ -203,7 +203,7 @@ Broaden syntax and compatibility for `usermodel_rust()` and `userGWAS_rust()`:
 - regressions via `~`
 - labels and equality constraints
 - inequality constraints
-- defined parameters via `:=`
+- defined parameters via `:=` for the supported arithmetic subset
 - `lav_model_get_parameters_rust()`
 - `lav_func_jacobian_complex_rust()`
 - `inspect_rust(..., "se")`

@@ -75,12 +75,16 @@ the compiler seam before moving solvers onto it.
      residual covariances, direct effects, and simple labeled lower bounds
    - done: lavaan-style auto expansion for omitted residual/latent variances,
      exogenous covariances, and generic `std.lv` behavior
-   - next: decide how much of lavaan's symbolic layer belongs in the fast path
+   - done: user-defined parameters via `:=` for the supported arithmetic subset
+   - next: decide how much more of lavaan's symbolic layer belongs in the fast
+     path
 6. Extend the symbolic layer only where GenomicSEM needs it next:
    - done: equality reuse via repeated labels
    - done: simple lower-bound constraints
-   - next: decide whether `:=` and richer nonlinear constraints belong in the
-     same generic layer or a later symbolic layer.
+   - done: `:=` evaluation plus the lavaan-compatible free-parameter/Jacobian
+     helpers GenomicSEM uses for delta-method SEs
+   - next: decide whether richer nonlinear constraints belong in the same
+     generic layer or a later symbolic layer.
 
 ## Current parser boundary
 
@@ -96,21 +100,24 @@ B ~~ rvB*B
 C ~~ rvC*C
 F1 ~~ psi*F1
 SNP ~~ 0.42*SNP
+indirect := beta * direct
 rvA > .001
 ```
 
 That covers multi-factor/direct-effect model strings and the common shorthand
 case where lavaan auto-generates omitted residual/latent variances and
 exogenous covariances. The generic path now supports both marker-scaled and
-`std.lv = TRUE` identification for shorthand measurement models.
+`std.lv = TRUE` identification for shorthand measurement models, plus
+user-defined parameters built from labeled parameters with `+`, `-`, `*`, `/`,
+`^`, `sqrt()`, `exp()`, and `log()`.
 
 The main remaining gaps to broad GenomicSEM workflow coverage are:
 
-1. user-defined parameters via `:=`
-2. broader nonlinear/equality constraint syntax beyond repeated labels and
+1. broader nonlinear/equality constraint syntax beyond repeated labels and
    simple lower bounds
-3. broader standardized-output compatibility for generic multi-factor models
-4. non-DWLS estimators and the wider parts of lavaan outside the RAM covariance
+2. any defined-parameter expressions outside the current arithmetic/function
+   subset
+3. non-DWLS estimators and the wider parts of lavaan outside the RAM covariance
    subset
 
 The decision point after that is whether `lavaan_fast` remains a compiler that
