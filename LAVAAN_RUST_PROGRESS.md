@@ -1228,6 +1228,56 @@ speedups elsewhere in the branch therefore come from specialized kernels,
 batched orchestration, lower interpreter overhead, and parallel work, not from
 the generic RAM fallback already having superior scaling.
 
+## 2026-05-07 11:18 PDT
+
+### Matched-scaling diagnosis and fixes
+
+The matched benchmark exposed two avoidable costs in the generic path:
+
+1. The Rust DWLS fitters treated `WLS.V` as dense even when it was the diagonal
+   matrix supplied by the DWLS workflows in these benchmarks. That made each
+   iteration pay dense `W * delta` work.
+2. The generic R parser built one-row `data.frame`s inside a loop and then
+   row-bound them. `Rprof` on the `48`-variable case showed `data.frame()` and
+   its conversion helpers dominating parser time.
+
+Changes made:
+
+- `b47c47c` adds a shared `DwlsWeights` representation in Rust. Diagonal
+  matrices now use elementwise row scaling while genuinely dense matrices keep
+  the general path.
+- `990a133` builds the parser's structural parameter table column-wise and
+  creates one `data.frame` at the end.
+
+Remote panda/flex component profile on the noisy `48`-variable matched model:
+
+| Stage | Before parser fix | After parser fix |
+| --- | ---: | ---: |
+| generic parser | `0.091 s` | `0.009 s` |
+| Rust fit core | `0.029 s` | `0.029 s` |
+| end-to-end `sem_rust()` | `0.140 s` | `0.050 s` |
+
+Remote matched-scaling progression:
+
+| State | `48` vars / `97` free | variable-family exponent vs `n_free` | `24` vars / `225` free | parameter-family exponent vs `n_free` |
+| --- | ---: | ---: | ---: | ---: |
+| before | `0.265 s` | `1.42` | `0.364 s` | `1.14` |
+| after diagonal DWLS weights | `0.129 s` | `1.03` | `0.318 s` | `1.12` |
+| after parser table vectorization | `0.051 s` | `1.13` | `0.128 s` | `1.51` |
+
+The last exponent increase in the parameter family is not a regression in wall
+time. Removing large fixed parser overhead exposes the real remaining generic
+solver cost more clearly: with `n_vars` fixed, the raw surface evaluator grows
+roughly linearly in free parameters, while the Rust fit core grows much faster
+because every Gauss-Newton iteration still forms and solves dense normal
+equations. In the remote parameter-family component profile, `fit_core` grows
+from `0.0025 s` at `49` free parameters to `0.0603 s` at `225`.
+
+That is now the next substantive generic-path question. The two incidental
+scaling penalties are fixed; further improvement requires changing the optimizer
+strategy or exploiting more structure than the current fully generic dense
+normal-equation path does.
+
 ### Validation
 
 - Local:

@@ -62,6 +62,8 @@ the compiler seam before moving solvers onto it.
      the compiled object
    - done: add an internal flat-array surface path and wrap named R matrices
      only at the public boundary
+   - done: detect diagonal DWLS weights and avoid dense weight-matrix products
+     in Rust fitters
    - next: decide whether a reusable native compiled plan is worth the extra
      lifecycle complexity
 4. Keep the generic optimizer simple and measured:
@@ -71,9 +73,12 @@ the compiler seam before moving solvers onto it.
      local optimizer micro-optimizations
    - done: add a matched nonsaturated scaling benchmark that separates
      variable-count growth from free-parameter growth
-   - next: prioritize reusable compiled plans and wrapper assembly cleanup over
-     another local fitter tweak unless a broader profile shows the optimizer has
-     become dominant again
+   - done: vectorize generic parser table construction after the matched
+     benchmark showed row-wise `data.frame()` assembly dominating end-to-end
+     generic fits
+   - next: evaluate whether the generic fallback should keep forming dense
+     Gauss-Newton normal equations for large free-parameter counts, or switch to
+     a matrix-free / quasi-Newton path once the supported surface is broad enough
 5. Add parser support for a larger syntax subset:
    - done: explicit RAM strings using `=~`, `~`, and `~~`
    - done: fixed coefficients, `NA*`, `start()`, labels/equality reuse,
