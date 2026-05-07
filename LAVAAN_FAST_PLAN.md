@@ -82,9 +82,12 @@ the compiler seam before moving solvers onto it.
      do not pay for an unused final bread inverse
    - done: exploit sparse diagonal-DWLS normal-equation formation when exact
      Jacobian row sparsity makes it cheaper than dense crossproducts
+   - done: use Cholesky for the actual generic damped solve path, with LU kept as
+     a fallback
    - next: evaluate whether the generic fallback should keep forming dense
      Gauss-Newton normal equations for large free-parameter counts, or switch to
-     a matrix-free / quasi-Newton path once the supported surface is broad enough
+     a better solver strategy once the supported surface is broad enough; a
+     first capped CG experiment was slower on the matched family and was dropped
 5. Add parser support for a larger syntax subset:
    - done: explicit RAM strings using `=~`, `~`, and `~~`
    - done: fixed coefficients, `NA*`, `start()`, labels/equality reuse,

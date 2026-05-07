@@ -1362,6 +1362,7 @@ Remote panda/flex matched-scaling progression on the fixed-`24`-variable family:
 | after sparse RAM Jacobians | `0.124 s` | `1.509` |
 | after honoring `se = "none"` | `0.115 s` | `1.473` |
 | after sparse diagonal normal equations | `0.096 s` | `1.380` |
+| after using Cholesky in the actual generic loop | `0.083 s` | `1.285` |
 
 The last row is a repeat run on the same installed build; the first sparse-normal
 run measured `0.097 s` and exponent `1.421`, so the gain is stable at the packet
@@ -1369,7 +1370,13 @@ level even though the pod shows normal benchmark jitter. On the widening
 variable-count family, the largest Rust fit is now `0.042 s` in the repeat run.
 
 This fixes the benchmark confounder and removes another avoidable dense step,
-but it does not remove the remaining asymptotic wall. The generic fallback still
+but it does not remove the remaining asymptotic wall. A focused instrumented run
+on the `225`-free-parameter case measured `22` generic iterations and, inside
+the native core, about `1.0 ms` total in surface construction, `2.0 ms` in
+normal-equation formation, `10.1 ms` in solves, and `0.4 ms` in candidate
+evaluation. I also tested a capped matrix-free conjugate-gradient solve with
+dense fallback; it preserved outputs but regressed the largest case to `0.089 s`,
+so it was dropped rather than carried forward. The generic fallback still
 factors a dense damped system each iteration; that dense solve is now the next
 structural optimization target if we want the free-parameter scaling curve to
 flatten further.
