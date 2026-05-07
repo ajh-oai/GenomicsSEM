@@ -1286,3 +1286,48 @@ normal-equation path does.
 - Remote panda/flex 16-CPU pod:
   - `Rscript -e 'library(GenomicSEM); testthat::test_dir("lavaanrust/tests/testthat"); testthat::test_dir("tests/testthat")'`
   - result: `116` lavaanrust tests and `46` wrapper tests passing
+
+## 2026-05-07 11:30 PDT
+
+### Sparse RAM Jacobian accumulation
+
+The next generic-path change targets the RAM surface evaluator itself rather than
+wrapper or parser overhead:
+
+- `c823935` rewrites generic RAM Jacobian assembly around the rank-one structure
+  of each RAM row derivative.
+- The evaluator now carries only the observed rows of `(I - A)^-1`, computes the
+  observed-by-variable covariance projection once, and accumulates lower-triangle
+  Jacobian entries through sparse outer-product support sets.
+- This keeps the evaluator generic: dense models still take the dense work, but
+  exact zeros in the RAM projection are no longer revisited for every free
+  parameter/statistic pair.
+- Added Rust unit tests that compare sparse lower-triangle accumulation against
+  the dense symmetric outer-product formulas.
+
+Remote matched-scaling progression on the same panda/flex 16-CPU pod:
+
+| State | `48` vars / `97` free full fit | raw surface | variable-family surface exponent vs `n_free` | `24` vars / `225` free full fit | raw surface | parameter-family surface exponent vs `n_free` |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| after parser table vectorization | `0.051 s` | `0.000801 s` | `1.923` | `0.128 s` | `0.000466 s` | `0.867` |
+| after sparse RAM Jacobians | `0.040 s` | `0.000237 s` | `1.273` | `0.124 s` | `0.000114 s` | `0.429` |
+
+That is a `3.4x` raw-surface win on the variable-growth family and a `4.1x`
+raw-surface win on the free-parameter-growth family. The end-to-end generic fit
+improves too, but less dramatically: `1.28x` on the `48`-variable case and only
+`1.03x` on the `225`-free-parameter case. The residual parameter-family wall is
+therefore still outside Jacobian construction: dense Gauss-Newton normal
+equation formation/solve remains the next structural optimizer cost.
+
+### Validation
+
+- Local:
+  - `cargo test --manifest-path lavaanrust/src/rust/Cargo.toml`
+  - `Rscript -e 'pkgload::load_all(quiet=TRUE, recompile=TRUE); testthat::test_dir("lavaanrust/tests/testthat"); testthat::test_dir("tests/testthat")'`
+  - result: `4` Rust tests, `116` lavaanrust tests, and `46` wrapper tests passing
+- Remote panda/flex 16-CPU pod:
+  - `R CMD INSTALL lavaanrust`
+  - `Rscript -e 'library(GenomicSEM); testthat::test_dir("lavaanrust/tests/testthat"); testthat::test_dir("tests/testthat")'`
+  - `Rscript tools/bench_lavaan_rust_matched_scaling.R`
+  - result: `116` lavaanrust tests and `46` wrapper tests passing; benchmark rows
+    still matched fitted covariance outputs to at most `2.53e-07`

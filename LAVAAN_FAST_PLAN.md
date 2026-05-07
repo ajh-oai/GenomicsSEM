@@ -64,6 +64,8 @@ the compiler seam before moving solvers onto it.
      only at the public boundary
    - done: detect diagonal DWLS weights and avoid dense weight-matrix products
      in Rust fitters
+   - done: exploit sparse rank-one RAM Jacobian structure so exact-zero support
+     entries are not revisited during lower-triangle accumulation
    - next: decide whether a reusable native compiled plan is worth the extra
      lifecycle complexity
 4. Keep the generic optimizer simple and measured:
