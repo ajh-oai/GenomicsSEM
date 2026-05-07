@@ -110,7 +110,8 @@ evaluate_ram_surfaces <- function(lhs_index, rhs_index, op_code, free_index, fix
 #' @param n_variables Number of variables in the full RAM system.
 #' @param max_iter Maximum optimizer iterations.
 #' @param tol Convergence tolerance.
+#' @param compute_se Whether to compute naive standard errors from the final bread matrix.
 #' @export
-fit_ram_dwls <- function(sample_cov, wls_v, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, free_row_offsets, free_row_indices, lower_bounds, upper_bounds, n_variables, max_iter, tol) .Call(wrap__fit_ram_dwls, sample_cov, wls_v, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, free_row_offsets, free_row_indices, lower_bounds, upper_bounds, n_variables, max_iter, tol)
+fit_ram_dwls <- function(sample_cov, wls_v, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, free_row_offsets, free_row_indices, lower_bounds, upper_bounds, n_variables, max_iter, tol, compute_se) .Call(wrap__fit_ram_dwls, sample_cov, wls_v, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, free_row_offsets, free_row_indices, lower_bounds, upper_bounds, n_variables, max_iter, tol, compute_se)
 
 # nolint end

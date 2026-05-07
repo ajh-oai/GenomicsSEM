@@ -62,6 +62,102 @@ impl DwlsWeights {
     fn objective(&self, residual: &DVector<f64>) -> f64 {
         0.5 * residual.dot(&self.apply_vector(residual))
     }
+
+    fn normal_equations(
+        &self,
+        delta: &DMatrix<f64>,
+        residual: &DVector<f64>,
+    ) -> (DVector<f64>, DMatrix<f64>) {
+        match self {
+            Self::Diagonal(diagonal) => diagonal_normal_equations(delta, diagonal, Some(residual))
+                .unwrap_or_else(|| dense_normal_equations(self, delta, residual)),
+            Self::Dense(_) => dense_normal_equations(self, delta, residual),
+        }
+    }
+
+    fn weighted_crossprod(&self, delta: &DMatrix<f64>) -> DMatrix<f64> {
+        match self {
+            Self::Diagonal(diagonal) => diagonal_normal_equations(delta, diagonal, None)
+                .map(|(_, hessian)| hessian)
+                .unwrap_or_else(|| {
+                    let weighted_delta = self.apply_matrix(delta);
+                    delta.transpose() * &weighted_delta
+                }),
+            Self::Dense(_) => {
+                let weighted_delta = self.apply_matrix(delta);
+                delta.transpose() * &weighted_delta
+            }
+        }
+    }
+}
+
+fn dense_normal_equations(
+    weights: &DwlsWeights,
+    delta: &DMatrix<f64>,
+    residual: &DVector<f64>,
+) -> (DVector<f64>, DMatrix<f64>) {
+    let weighted_residual = weights.apply_vector(residual);
+    let weighted_delta = weights.apply_matrix(delta);
+    (
+        delta.transpose() * &weighted_residual,
+        delta.transpose() * &weighted_delta,
+    )
+}
+
+fn diagonal_normal_equations(
+    delta: &DMatrix<f64>,
+    diagonal: &DVector<f64>,
+    residual: Option<&DVector<f64>>,
+) -> Option<(DVector<f64>, DMatrix<f64>)> {
+    let n_rows = delta.nrows();
+    let n_cols = delta.ncols();
+    let mut row_entries = Vec::with_capacity(n_rows);
+    let mut sparse_pair_work = 0usize;
+
+    for row in 0..n_rows {
+        let mut entries = Vec::new();
+        for col in 0..n_cols {
+            let value = delta[(row, col)];
+            if value != 0.0 {
+                entries.push((col, value));
+            }
+        }
+
+        sparse_pair_work = sparse_pair_work.saturating_add(entries.len() * (entries.len() + 1) / 2);
+        row_entries.push(entries);
+    }
+
+    let dense_pair_work = n_rows.saturating_mul(n_cols).saturating_mul(n_cols);
+    if sparse_pair_work.saturating_mul(8) >= dense_pair_work {
+        return None;
+    }
+
+    let mut gradient = DVector::<f64>::zeros(n_cols);
+    let mut hessian = DMatrix::<f64>::zeros(n_cols, n_cols);
+
+    for row in 0..n_rows {
+        let row_weight = diagonal[row];
+        let entries = &row_entries[row];
+
+        if let Some(residual) = residual {
+            let weighted_residual = row_weight * residual[row];
+            for &(col, value) in entries {
+                gradient[col] += value * weighted_residual;
+            }
+        }
+
+        for (left_pos, &(left_col, left_value)) in entries.iter().enumerate() {
+            for &(right_col, right_value) in &entries[..=left_pos] {
+                let contribution = row_weight * left_value * right_value;
+                hessian[(left_col, right_col)] += contribution;
+                if left_col != right_col {
+                    hessian[(right_col, left_col)] += contribution;
+                }
+            }
+        }
+    }
+
+    Some((gradient, hessian))
 }
 
 #[cfg(test)]
@@ -108,6 +204,28 @@ mod dwls_weight_tests {
         assert_eq!(weights.apply_vector(&vector), &dense * &vector);
         assert_eq!(weights.apply_matrix(&matrix), &dense * &matrix);
     }
+
+    #[test]
+    fn sparse_diagonal_normal_equations_match_dense_products() {
+        let weights = DwlsWeights::Diagonal(DVector::from_vec(vec![2.0, 3.0, 4.0, 5.0]));
+        let residual = DVector::from_vec(vec![1.0, -2.0, 0.5, 3.0]);
+        let delta = DMatrix::from_row_slice(
+            4,
+            4,
+            &[
+                1.0, 0.0, 0.0, 0.0, //
+                0.0, 2.0, 0.0, 0.0, //
+                0.0, 0.0, 3.0, 0.0, //
+                0.0, 0.0, 0.0, 4.0,
+            ],
+        );
+        let dense = dense_normal_equations(&weights, &delta, &residual);
+        let sparse = weights.normal_equations(&delta, &residual);
+
+        assert_eq!(sparse.0, dense.0);
+        assert_eq!(sparse.1, dense.1);
+        assert_eq!(weights.weighted_crossprod(&delta), dense.1);
+    }
 }
 
 #[cfg(test)]
@@ -147,6 +265,17 @@ mod ram_surface_tests {
 
         let dense = &matrix * matrix.transpose();
         assert_eq!(sparse, vech(&dense));
+    }
+
+    #[test]
+    fn damped_normal_equation_solver_matches_dense_solution() {
+        let matrix = DMatrix::from_row_slice(3, 3, &[4.0, 1.0, 0.0, 1.0, 3.0, 0.5, 0.0, 0.5, 2.0]);
+        let rhs = DVector::from_vec(vec![1.0, 2.0, 3.0]);
+
+        let expected = matrix.clone().lu().solve(&rhs).unwrap();
+        let actual = solve_damped_normal_equations(&matrix, &rhs).unwrap();
+
+        assert!((&actual - expected).amax() < 1e-12);
     }
 }
 
@@ -799,6 +928,25 @@ fn add_self_outer_vech(
     }
 }
 
+fn solve_damped_normal_equations(
+    normal_matrix: &DMatrix<f64>,
+    rhs: &DVector<f64>,
+) -> Option<DVector<f64>> {
+    normal_matrix
+        .clone()
+        .cholesky()
+        .map(|factor| factor.solve(rhs))
+        .or_else(|| normal_matrix.clone().lu().solve(rhs))
+}
+
+fn invert_bread_matrix(bread_matrix: DMatrix<f64>) -> Option<DMatrix<f64>> {
+    bread_matrix
+        .clone()
+        .cholesky()
+        .map(|factor| factor.inverse())
+        .or_else(|| bread_matrix.try_inverse())
+}
+
 fn ram_surfaces_from_rows(
     lhs_index: &[i32],
     rhs_index: &[i32],
@@ -919,7 +1067,7 @@ fn fit_one_factor_dwls(
             regularized[(idx, idx)] += damping;
         }
 
-        let Some(step) = regularized.lu().solve(&gradient) else {
+        let Some(step) = solve_damped_normal_equations(&regularized, &gradient) else {
             damping *= 10.0;
             continue;
         };
@@ -1596,6 +1744,7 @@ fn evaluate_ram_surfaces(
 /// @param n_variables Number of variables in the full RAM system.
 /// @param max_iter Maximum optimizer iterations.
 /// @param tol Convergence tolerance.
+/// @param compute_se Whether to compute naive standard errors from the final bread matrix.
 /// @export
 #[extendr]
 fn fit_ram_dwls(
@@ -1615,6 +1764,7 @@ fn fit_ram_dwls(
     n_variables: i32,
     max_iter: i32,
     tol: f64,
+    compute_se: bool,
 ) -> std::result::Result<List, Error> {
     if n_variables <= 0 {
         return Err(Error::Other("n_variables must be positive".into()));
@@ -1712,9 +1862,7 @@ fn fit_ram_dwls(
         )?;
         let residual = &observed - vech(&implied);
         let weighted_residual = wls_v.apply_vector(&residual);
-        let weighted_delta = wls_v.apply_matrix(&delta);
-        let gradient = delta.transpose() * &weighted_residual;
-        let hessian = delta.transpose() * &weighted_delta;
+        let (gradient, hessian) = wls_v.normal_equations(&delta, &residual);
         let mut regularized = hessian.clone();
 
         for idx in 0..regularized.nrows() {
@@ -1774,11 +1922,13 @@ fn fit_ram_dwls(
         n_variables,
     )?;
     let residual = &observed - vech(&implied);
-    let weighted_delta = wls_v.apply_matrix(&delta);
-    let bread = (delta.transpose() * &weighted_delta)
-        .try_inverse()
-        .unwrap_or_else(|| DMatrix::<f64>::zeros(params.len(), params.len()));
-    let naive_se = bread.diagonal().map(|value| value.max(0.0).sqrt());
+    let naive_se = if compute_se {
+        let bread = invert_bread_matrix(wls_v.weighted_crossprod(&delta))
+            .unwrap_or_else(|| DMatrix::<f64>::zeros(params.len(), params.len()));
+        bread.diagonal().map(|value| value.max(0.0).sqrt())
+    } else {
+        DVector::<f64>::zeros(params.len())
+    };
     let objective = wls_v.objective(&residual);
 
     Ok(list!(

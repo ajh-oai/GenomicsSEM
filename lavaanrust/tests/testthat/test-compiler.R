@@ -319,6 +319,32 @@ test_that("lavaan_fast generic parser tolerates row-only covariance names", {
   expect_equal(parsed$start[4:6], c(0.5, 0.6, 0.45))
 })
 
+test_that("lavaan_fast generic fitter can skip naive SE inversion", {
+  fixture <- usermodel_fixture()
+  parsed <- lavaanrust:::.lavaan_fast_parse_model_string(
+    fixture$model,
+    fixture$sample_cov,
+    std.lv = TRUE
+  )
+  compiled <- lavaanrust:::.lavaan_fast_compile_par_table(parsed, colnames(fixture$sample_cov))
+
+  with_se <- lavaanrust:::.lavaan_fast_fit_dwls_rust(
+    compiled,
+    fixture$sample_cov,
+    fixture$wls_v
+  )
+  without_se <- lavaanrust:::.lavaan_fast_fit_dwls_rust(
+    compiled,
+    fixture$sample_cov,
+    fixture$wls_v,
+    compute_se = FALSE
+  )
+
+  expect_equal(without_se$estimates, with_se$estimates, tolerance = 1e-10)
+  expect_equal(without_se$implied, with_se$implied, tolerance = 1e-10)
+  expect_equal(without_se$naive_se, rep(0, length(without_se$estimates)))
+})
+
 test_that("lavaan_fast generic shorthand strings fit through the native RAM path", {
   sample_cov <- diag(c(1, 1.2, 0.9, 1.1, 0.8, 1.3))
   dimnames(sample_cov) <- list(c("A", "B", "C", "D", "E", "F"), c("A", "B", "C", "D", "E", "F"))

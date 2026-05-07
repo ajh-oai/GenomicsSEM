@@ -2230,7 +2230,7 @@
   )
 }
 
-.fit_lavaan_fast_ram_model <- function(par_table, sample.cov, WLS.V) {
+.fit_lavaan_fast_ram_model <- function(par_table, sample.cov, WLS.V, compute_se = TRUE) {
   par_table <- .lavaan_fast_normalize_free_ids(par_table)
   observed_names <- colnames(sample.cov)
   if (is.null(observed_names)) {
@@ -2241,7 +2241,7 @@
   }
 
   compiled <- .lavaan_fast_compile_par_table(par_table, observed_names)
-  fit <- .lavaan_fast_fit_dwls_rust(compiled, sample.cov, WLS.V)
+  fit <- .lavaan_fast_fit_dwls_rust(compiled, sample.cov, WLS.V, compute_se = compute_se)
   .new_lavaan_fast_ram_fit(par_table, sample.cov, WLS.V, compiled, fit)
 }
 
@@ -2257,6 +2257,7 @@
 sem_rust <- function(model, sample.cov, estimator = "ML", WLS.V = NULL, ...) {
   dots <- list(...)
   std.lv <- isTRUE(dots$std.lv)
+  compute_se <- !identical(dots$se, "none")
 
   if (
     identical(estimator, "DWLS") &&
@@ -2344,7 +2345,7 @@ sem_rust <- function(model, sample.cov, estimator = "ML", WLS.V = NULL, ...) {
   ) {
     parsed_model <- .lavaan_fast_parse_model_string(model, sample.cov, std.lv = std.lv)
     if (!is.null(parsed_model)) {
-      return(.fit_lavaan_fast_ram_model(parsed_model, sample.cov, WLS.V))
+      return(.fit_lavaan_fast_ram_model(parsed_model, sample.cov, WLS.V, compute_se = compute_se))
     }
   }
 
@@ -2365,7 +2366,7 @@ sem_rust <- function(model, sample.cov, estimator = "ML", WLS.V = NULL, ...) {
     }
 
     if (any(model$op %in% c("=~", "~") & model$free > 0L)) {
-      return(.fit_lavaan_fast_ram_model(model, sample.cov, WLS.V))
+      return(.fit_lavaan_fast_ram_model(model, sample.cov, WLS.V, compute_se = compute_se))
     }
 
     return(.fit_observed_covariance_model(

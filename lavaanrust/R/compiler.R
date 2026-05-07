@@ -339,7 +339,14 @@
   list(implied = implied, delta = jacobian)
 }
 
-.lavaan_fast_fit_dwls_rust <- function(compiled, sample_cov, wls_v, max_iter = 400L, tol = 1e-12) {
+.lavaan_fast_fit_dwls_rust <- function(
+  compiled,
+  sample_cov,
+  wls_v,
+  max_iter = 400L,
+  tol = 1e-12,
+  compute_se = TRUE
+) {
   fit <- fit_ram_dwls(
     as.double(sample_cov),
     as.double(wls_v),
@@ -356,7 +363,8 @@
     as.double(compiled$free_upper_bounds),
     as.integer(compiled$n_variables),
     as.integer(max_iter),
-    tol
+    tol,
+    isTRUE(compute_se)
   )
 
   fit$implied <- matrix(
