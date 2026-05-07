@@ -1202,9 +1202,9 @@ Remote panda/flex 16-CPU run, 2026-05-07:
 
 | Family | Axis | lavaan exponent | lavaanrust exponent | lavaanrust raw surface exponent |
 | --- | --- | ---: | ---: | ---: |
-| `variable_scaling` | `n_vars` | `0.73` | `1.38` | `1.87` |
-| `variable_scaling` | `n_free` | `0.76` | `1.43` | `1.93` |
-| `parameter_scaling` | `n_free` | `0.65` | `1.13` | `0.88` |
+| `variable_scaling` | `n_vars` | `0.73` | `1.37` | `1.87` |
+| `variable_scaling` | `n_free` | `0.76` | `1.42` | `1.94` |
+| `parameter_scaling` | `n_free` | `0.66` | `1.14` | `0.90` |
 
 Selected medians from the same run:
 
@@ -1212,10 +1212,10 @@ Selected medians from the same run:
 | --- | --- | ---: | ---: | ---: |
 | `variable_scaling` | `6` vars, `13` free | `0.033 s` | `0.017 s` | `0.000018 s` |
 | `variable_scaling` | `24` vars, `49` free | `0.056 s` | `0.059 s` | `0.000125 s` |
-| `variable_scaling` | `48` vars, `97` free | `0.156 s` | `0.269 s` | `0.000809 s` |
-| `parameter_scaling` | `24` vars, `49` free | `0.055 s` | `0.060 s` | `0.000125 s` |
-| `parameter_scaling` | `24` vars, `145` free | `0.091 s` | `0.201 s` | `0.000314 s` |
-| `parameter_scaling` | `24` vars, `225` free | `0.153 s` | `0.363 s` | `0.000477 s` |
+| `variable_scaling` | `48` vars, `97` free | `0.154 s` | `0.265 s` | `0.000821 s` |
+| `parameter_scaling` | `24` vars, `49` free | `0.055 s` | `0.059 s` | `0.000125 s` |
+| `parameter_scaling` | `24` vars, `121` free | `0.082 s` | `0.184 s` | `0.000269 s` |
+| `parameter_scaling` | `24` vars, `225` free | `0.154 s` | `0.364 s` | `0.000475 s` |
 
 All rows in that run stayed on `ram_dwls_generic`, converged in both backends,
 and matched fitted covariance outputs to at most `2.54e-07`.
