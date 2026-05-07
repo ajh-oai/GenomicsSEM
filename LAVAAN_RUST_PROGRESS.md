@@ -1331,3 +1331,58 @@ equation formation/solve remains the next structural optimizer cost.
   - `Rscript tools/bench_lavaan_rust_matched_scaling.R`
   - result: `116` lavaanrust tests and `46` wrapper tests passing; benchmark rows
     still matched fitted covariance outputs to at most `2.53e-07`
+
+## 2026-05-07 11:47 PDT
+
+### Generic optimizer cleanup after sparse Jacobians
+
+The sparse-Jacobian work exposed two remaining generic-fit issues:
+
+1. `sem_rust(..., se = "none")` still paid for the final dense bread inverse,
+   while the matched lavaan arm actually skipped SE work. That made the previous
+   `se = "none"` comparison slightly unfair to the Rust path.
+2. Even with a sparse Jacobian, the generic optimizer still formed `J'WJ`
+   densely for diagonal-DWLS fits.
+
+Changes made:
+
+- propagate `se = "none"` into the generic RAM fitter and skip the unused final
+  bread inversion when naive SEs are not requested
+- solve damped Gauss-Newton systems with Cholesky first and keep the previous LU
+  path as a fallback
+- build diagonal-DWLS normal equations row-sparsely when exact Jacobian row
+  support makes that materially cheaper than a dense crossproduct
+- add regression coverage for `compute_se = FALSE`, sparse diagonal normal
+  equations, and the Cholesky/LU solver helper
+
+Remote panda/flex matched-scaling progression on the fixed-`24`-variable family:
+
+| State | `225` free full fit | parameter-family exponent vs `n_free` |
+| --- | ---: | ---: |
+| after sparse RAM Jacobians | `0.124 s` | `1.509` |
+| after honoring `se = "none"` | `0.115 s` | `1.473` |
+| after sparse diagonal normal equations | `0.096 s` | `1.380` |
+
+The last row is a repeat run on the same installed build; the first sparse-normal
+run measured `0.097 s` and exponent `1.421`, so the gain is stable at the packet
+level even though the pod shows normal benchmark jitter. On the widening
+variable-count family, the largest Rust fit is now `0.042 s` in the repeat run.
+
+This fixes the benchmark confounder and removes another avoidable dense step,
+but it does not remove the remaining asymptotic wall. The generic fallback still
+factors a dense damped system each iteration; that dense solve is now the next
+structural optimization target if we want the free-parameter scaling curve to
+flatten further.
+
+### Validation
+
+- Local:
+  - `cargo test --manifest-path lavaanrust/src/rust/Cargo.toml`
+  - `Rscript -e 'pkgload::load_all("lavaanrust", quiet=TRUE, recompile=TRUE); testthat::test_dir("lavaanrust/tests/testthat"); pkgload::load_all(quiet=TRUE); testthat::test_dir("tests/testthat")'`
+  - result: `6` Rust tests, `119` lavaanrust tests, and `46` wrapper tests passing
+- Remote panda/flex 16-CPU pod:
+  - `R CMD INSTALL lavaanrust`
+  - `Rscript -e 'library(GenomicSEM); testthat::test_dir("lavaanrust/tests/testthat"); testthat::test_dir("tests/testthat")'`
+  - `Rscript tools/bench_lavaan_rust_matched_scaling.R`
+  - result: `119` lavaanrust tests and `46` wrapper tests passing; matched
+    benchmark rows still agree with lavaan to at most `2.53e-07`

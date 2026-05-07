@@ -78,6 +78,10 @@ the compiler seam before moving solvers onto it.
    - done: vectorize generic parser table construction after the matched
      benchmark showed row-wise `data.frame()` assembly dominating end-to-end
      generic fits
+   - done: honor `se = "none"` in the generic RAM path so benchmarks and callers
+     do not pay for an unused final bread inverse
+   - done: exploit sparse diagonal-DWLS normal-equation formation when exact
+     Jacobian row sparsity makes it cheaper than dense crossproducts
    - next: evaluate whether the generic fallback should keep forming dense
      Gauss-Newton normal equations for large free-parameter counts, or switch to
      a matrix-free / quasi-Newton path once the supported surface is broad enough
