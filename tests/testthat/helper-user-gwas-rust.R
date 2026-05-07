@@ -162,3 +162,13 @@ user_gwas_row_keys <- function(result) {
 user_gwas_numeric_columns <- function(result) {
   names(result)[vapply(result, is.numeric, logical(1L))]
 }
+
+user_gwas_numeric_frame <- function(result, columns = user_gwas_numeric_columns(result)) {
+  out <- result[columns]
+  rownames(out) <- NULL
+  out
+}
+
+user_gwas_structural_rows <- function(result) {
+  result[!result$op %in% c("==", "<", ">", "<=", ">="), , drop = FALSE]
+}

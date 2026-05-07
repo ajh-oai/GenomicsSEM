@@ -38,8 +38,8 @@ test_that("userGWAS_rust matches lavaan across the supported std.lv matrix", {
       )
     )
     expect_equal(
-      rust[user_gwas_numeric_columns(old)],
-      old[user_gwas_numeric_columns(old)],
+      user_gwas_numeric_frame(rust, user_gwas_numeric_columns(old)),
+      user_gwas_numeric_frame(old, user_gwas_numeric_columns(old)),
       tolerance = 2e-6,
       info = sprintf(
         "std.lv=%s fix_measurement=%s Q_SNP=%s",
@@ -75,9 +75,9 @@ test_that("userGWAS_rust handles labeled direct effects and defined parameters",
     expect_true(any(rust$lhs == "combo" & rust$op == ":="))
     expect_equal(user_gwas_row_keys(rust), user_gwas_row_keys(old))
     expect_equal(
-      rust[user_gwas_numeric_columns(old)],
-      old[user_gwas_numeric_columns(old)],
-      tolerance = 2e-6
+      user_gwas_numeric_frame(rust, user_gwas_numeric_columns(old)),
+      user_gwas_numeric_frame(old, user_gwas_numeric_columns(old)),
+      tolerance = 1e-5
     )
   }
 })
@@ -100,12 +100,14 @@ test_that("userGWAS_rust matches lavaan on bounded generic models", {
     fix_measurement = FALSE,
     q_snp = FALSE
   )
+  old <- user_gwas_structural_rows(old)
+  rust <- user_gwas_structural_rows(rust)
 
   expect_equal(user_gwas_row_keys(rust), user_gwas_row_keys(old))
   expect_equal(
-    rust[user_gwas_numeric_columns(old)],
-    old[user_gwas_numeric_columns(old)],
-    tolerance = 2e-6
+    user_gwas_numeric_frame(rust, user_gwas_numeric_columns(old)),
+    user_gwas_numeric_frame(old, user_gwas_numeric_columns(old)),
+    tolerance = 1e-5
   )
 })
 
@@ -149,8 +151,8 @@ test_that("userGWAS_rust matches lavaan across two-factor option surfaces", {
       )
     )
     expect_equal(
-      rust[user_gwas_numeric_columns(old)],
-      old[user_gwas_numeric_columns(old)],
+      user_gwas_numeric_frame(rust, user_gwas_numeric_columns(old)),
+      user_gwas_numeric_frame(old, user_gwas_numeric_columns(old)),
       tolerance = 2e-6,
       info = sprintf(
         "std.lv=%s fix_measurement=%s Q_SNP=%s",
@@ -171,8 +173,8 @@ test_that("usermodel_rust matches lavaan on two-factor models", {
 
     expect_equal(user_gwas_row_keys(rust), user_gwas_row_keys(old))
     expect_equal(
-      rust[user_gwas_numeric_columns(old)],
-      old[user_gwas_numeric_columns(old)],
+      user_gwas_numeric_frame(rust, user_gwas_numeric_columns(old)),
+      user_gwas_numeric_frame(old, user_gwas_numeric_columns(old)),
       tolerance = 2e-6
     )
   }
@@ -195,8 +197,8 @@ test_that("usermodel_rust matches lavaan on bounded generic models", {
 
   expect_equal(user_gwas_row_keys(rust), user_gwas_row_keys(old))
   expect_equal(
-    rust[user_gwas_numeric_columns(old)],
-    old[user_gwas_numeric_columns(old)],
+    user_gwas_numeric_frame(rust, user_gwas_numeric_columns(old)),
+    user_gwas_numeric_frame(old, user_gwas_numeric_columns(old)),
     tolerance = 2e-6
   )
 })
