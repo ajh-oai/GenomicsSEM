@@ -868,25 +868,35 @@
 
   free_labels <- integer()
   next_free <- 1L
-  par_rows <- vector("list", length(rows))
+  n_rows <- length(rows)
+  lhs <- character(n_rows)
+  op <- character(n_rows)
+  rhs <- character(n_rows)
+  user <- integer(n_rows)
+  free <- integer(n_rows)
+  ustart <- rep(NA_real_, n_rows)
+  label <- character(n_rows)
+  lower <- rep(NA_real_, n_rows)
+  upper <- rep(NA_real_, n_rows)
+  start <- numeric(n_rows)
   for (row_idx in seq_along(rows)) {
     row <- rows[[row_idx]]
-    free <- 0L
+    free_value <- 0L
 
     if (row$is_free) {
       free_key <- if (nzchar(row$label)) label_groups[[row$label]] else ""
       if (nzchar(free_key) && free_key %in% names(free_labels)) {
-        free <- free_labels[[free_key]]
+        free_value <- free_labels[[free_key]]
       } else {
-        free <- next_free
+        free_value <- next_free
         if (nzchar(free_key)) {
-          free_labels[[free_key]] <- free
+          free_labels[[free_key]] <- free_value
         }
         next_free <- next_free + 1L
       }
     }
 
-    start <- if (is.finite(row$fixed_value)) {
+    start_value <- if (is.finite(row$fixed_value)) {
       row$fixed_value
     } else if (is.finite(row$start_value)) {
       row$start_value
@@ -894,37 +904,46 @@
       .lavaan_fast_default_start(row$op, row$lhs, row$rhs, observed_names, sample_cov)
     }
 
-    par_rows[[row_idx]] <- data.frame(
-      id = row_idx,
-      lhs = row$lhs,
-      op = row$op,
-      rhs = row$rhs,
-      user = row$user,
-      block = 1L,
-      group = 1L,
-      free = as.integer(free),
-      ustart = if (row$is_free) row$start_value else row$fixed_value,
-      exo = 0L,
-      label = row$label,
-      lower = if (nzchar(row$label) && label_groups[[row$label]] %in% names(group_lower_bounds)) {
+    lhs[[row_idx]] <- row$lhs
+    op[[row_idx]] <- row$op
+    rhs[[row_idx]] <- row$rhs
+    user[[row_idx]] <- row$user
+    free[[row_idx]] <- free_value
+    ustart[[row_idx]] <- if (row$is_free) row$start_value else row$fixed_value
+    label[[row_idx]] <- row$label
+    lower[[row_idx]] <- if (nzchar(row$label) && label_groups[[row$label]] %in% names(group_lower_bounds)) {
         group_lower_bounds[[label_groups[[row$label]]]]
       } else {
         NA_real_
-      },
-      upper = if (nzchar(row$label) && label_groups[[row$label]] %in% names(group_upper_bounds)) {
+      }
+    upper[[row_idx]] <- if (nzchar(row$label) && label_groups[[row$label]] %in% names(group_upper_bounds)) {
         group_upper_bounds[[label_groups[[row$label]]]]
       } else {
         NA_real_
-      },
-      plabel = paste0(".p", row_idx, "."),
-      start = start,
-      est = start,
-      se = 0,
-      stringsAsFactors = FALSE
-    )
+      }
+    start[[row_idx]] <- start_value
   }
 
-  par_table <- do.call(rbind, par_rows)
+  par_table <- data.frame(
+    id = seq_len(n_rows),
+    lhs = lhs,
+    op = op,
+    rhs = rhs,
+    user = user,
+    block = rep.int(1L, n_rows),
+    group = rep.int(1L, n_rows),
+    free = free,
+    ustart = ustart,
+    exo = integer(n_rows),
+    label = label,
+    lower = lower,
+    upper = upper,
+    plabel = paste0(".p", seq_len(n_rows), "."),
+    start = start,
+    est = start,
+    se = numeric(n_rows),
+    stringsAsFactors = FALSE
+  )
   if (length(equalities)) {
     equality_rows <- lapply(seq_along(equalities), function(idx) {
       equality <- equalities[[idx]]
