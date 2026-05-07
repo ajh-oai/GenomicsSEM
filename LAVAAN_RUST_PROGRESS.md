@@ -1376,10 +1376,12 @@ the native core, about `1.0 ms` total in surface construction, `2.0 ms` in
 normal-equation formation, `10.1 ms` in solves, and `0.4 ms` in candidate
 evaluation. I also tested a capped matrix-free conjugate-gradient solve with
 dense fallback; it preserved outputs but regressed the largest case to `0.089 s`,
-so it was dropped rather than carried forward. The generic fallback still
-factors a dense damped system each iteration; that dense solve is now the next
-structural optimization target if we want the free-parameter scaling curve to
-flatten further.
+so it was dropped rather than carried forward. A follow-up diagonal-fringe
+elimination experiment matched dense solves but left the largest case effectively
+unchanged at `0.084 s`, so that extra machinery was dropped too. The generic
+fallback still factors a dense damped system each iteration; that dense solve is
+now the next structural optimization target if we want the free-parameter
+scaling curve to flatten further.
 
 ### Validation
 
