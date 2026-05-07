@@ -81,6 +81,7 @@ the compiler seam before moving solvers onto it.
 6. Extend the symbolic layer only where GenomicSEM needs it next:
    - done: equality reuse via repeated labels
    - done: simple lower-bound constraints
+   - done: simple box bounds plus explicit label equalities
    - done: `:=` evaluation plus the lavaan-compatible free-parameter/Jacobian
      helpers GenomicSEM uses for delta-method SEs
    - next: decide whether richer nonlinear constraints belong in the same
@@ -113,8 +114,8 @@ user-defined parameters built from labeled parameters with `+`, `-`, `*`, `/`,
 
 The main remaining gaps to broad GenomicSEM workflow coverage are:
 
-1. broader nonlinear/equality constraint syntax beyond repeated labels and
-   simple lower bounds
+1. nonlinear or expression-valued constraint syntax beyond simple label
+   equalities and scalar box bounds
 2. any defined-parameter expressions outside the current arithmetic/function
    subset
 3. non-DWLS estimators and the wider parts of lavaan outside the RAM covariance

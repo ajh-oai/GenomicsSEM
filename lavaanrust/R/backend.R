@@ -245,6 +245,7 @@
       exo = 0L,
       label = definition$lhs,
       lower = NA_real_,
+      upper = NA_real_,
       plabel = "",
       start = 0,
       est = 0,
@@ -267,7 +268,7 @@
     ))
   }
 
-  structural_rows <- which(par_table$op != ":=")
+  structural_rows <- which(par_table$op %in% c("=~", "~", "~~"))
   label_rows <- structural_rows[nzchar(par_table$label[structural_rows])]
   label_info <- split(label_rows, par_table$label[label_rows])
   free_positions <- setNames(integer(length(label_info)), names(label_info))
@@ -393,11 +394,50 @@
   unlist(values, use.names = TRUE)
 }
 
+.lavaan_fast_label_groups <- function(labels, equalities = list()) {
+  labels <- unique(labels[nzchar(labels)])
+  if (!length(labels)) {
+    return(character())
+  }
+
+  parent <- stats::setNames(labels, labels)
+  find_root <- function(label) {
+    while (!identical(parent[[label]], label)) {
+      parent[[label]] <<- parent[[parent[[label]]]]
+      label <- parent[[label]]
+    }
+
+    label
+  }
+
+  for (equality in equalities) {
+    lhs <- equality$lhs
+    rhs <- equality$rhs
+    if (!lhs %in% labels || !rhs %in% labels) {
+      next
+    }
+
+    lhs_root <- find_root(lhs)
+    rhs_root <- find_root(rhs)
+    if (!identical(lhs_root, rhs_root)) {
+      parent[[rhs_root]] <- lhs_root
+    }
+  }
+
+  vapply(labels, find_root, character(1L))
+}
+
 .lavaan_fast_normalize_free_ids <- function(par_table) {
   par_table <- as.data.frame(par_table, stringsAsFactors = FALSE)
   if (!nrow(par_table)) {
     return(par_table)
   }
+
+  labels <- par_table$label[nzchar(par_table$label)]
+  equalities <- lapply(which(par_table$op == "=="), function(row_idx) {
+    list(lhs = par_table$lhs[[row_idx]], rhs = par_table$rhs[[row_idx]])
+  })
+  label_groups <- .lavaan_fast_label_groups(labels, equalities)
 
   next_free <- 1L
   label_free <- integer()
@@ -408,14 +448,15 @@
     }
 
     label <- par_table$label[[row_idx]]
-    if (nzchar(label) && label %in% names(label_free)) {
-      normalized[[row_idx]] <- label_free[[label]]
+    free_key <- if (nzchar(label) && label %in% names(label_groups)) label_groups[[label]] else label
+    if (nzchar(free_key) && free_key %in% names(label_free)) {
+      normalized[[row_idx]] <- label_free[[free_key]]
       next
     }
 
     normalized[[row_idx]] <- next_free
-    if (nzchar(label)) {
-      label_free[[label]] <- next_free
+    if (nzchar(free_key)) {
+      label_free[[free_key]] <- next_free
     }
     next_free <- next_free + 1L
   }
@@ -687,13 +728,15 @@
   lines <- trimws(sub("#.*$", "", lines))
   lines <- lines[nzchar(lines)]
 
-  if (!length(lines) || any(grepl("(==|<)", lines))) {
+  if (!length(lines)) {
     return(NULL)
   }
 
   rows <- list()
   definitions <- list()
   lower_bounds <- numeric()
+  upper_bounds <- numeric()
+  equalities <- list()
   for (line in lines) {
     definition <- .lavaan_fast_parse_definition(line)
     if (!is.null(definition)) {
@@ -705,27 +748,47 @@
       return(NULL)
     }
 
-    constraint_match <- regexec(
-      "^([A-Za-z.][A-Za-z0-9_.]*)\\s*>\\s*([+-]?(?:[0-9]*\\.?[0-9]+)(?:[eE][+-]?[0-9]+)?)$",
+    equality_match <- regexec(
+      "^([A-Za-z.][A-Za-z0-9_.]*)\\s*==\\s*([A-Za-z.][A-Za-z0-9_.]*)$",
       line
     )
-    constraint_parts <- regmatches(line, constraint_match)[[1L]]
-    if (length(constraint_parts)) {
-      label <- constraint_parts[[2L]]
-      lower <- .lavaan_fast_numeric_value(constraint_parts[[3L]])
-      if (!is.finite(lower)) {
-        return(NULL)
-      }
-
-      if (label %in% names(lower_bounds) && !isTRUE(all.equal(lower_bounds[[label]], lower))) {
-        return(NULL)
-      }
-
-      lower_bounds[[label]] <- lower
+    equality_parts <- regmatches(line, equality_match)[[1L]]
+    if (length(equality_parts)) {
+      equalities[[length(equalities) + 1L]] <- list(
+        lhs = equality_parts[[2L]],
+        rhs = equality_parts[[3L]]
+      )
       next
     }
 
-    if (grepl(">", line, fixed = TRUE)) {
+    bound_match <- regexec(
+      "^([A-Za-z.][A-Za-z0-9_.]*)\\s*(>|<)\\s*([+-]?(?:[0-9]*\\.?[0-9]+)(?:[eE][+-]?[0-9]+)?)$",
+      line
+    )
+    bound_parts <- regmatches(line, bound_match)[[1L]]
+    if (length(bound_parts)) {
+      label <- bound_parts[[2L]]
+      op <- bound_parts[[3L]]
+      value <- .lavaan_fast_numeric_value(bound_parts[[4L]])
+      if (!is.finite(value)) {
+        return(NULL)
+      }
+
+      if (identical(op, ">")) {
+        if (label %in% names(lower_bounds) && !isTRUE(all.equal(lower_bounds[[label]], value))) {
+          return(NULL)
+        }
+        lower_bounds[[label]] <- value
+      } else {
+        if (label %in% names(upper_bounds) && !isTRUE(all.equal(upper_bounds[[label]], value))) {
+          return(NULL)
+        }
+        upper_bounds[[label]] <- value
+      }
+      next
+    }
+
+    if (grepl("(==|>|<)", line)) {
       return(NULL)
     }
 
@@ -776,7 +839,30 @@
   }
   rows <- .lavaan_fast_expand_auto_rows(rows, observed_names, sample_cov, std.lv)
   row_labels <- vapply(rows, `[[`, character(1L), "label")
-  if (length(lower_bounds) && !all(names(lower_bounds) %in% row_labels[nzchar(row_labels)])) {
+  constrained_labels <- unique(c(
+    names(lower_bounds),
+    names(upper_bounds),
+    unlist(equalities, use.names = FALSE)
+  ))
+  if (length(constrained_labels) && !all(constrained_labels %in% row_labels[nzchar(row_labels)])) {
+    return(NULL)
+  }
+  label_groups <- .lavaan_fast_label_groups(row_labels, equalities)
+  group_lower_bounds <- numeric()
+  group_upper_bounds <- numeric()
+  for (label in names(label_groups)) {
+    group <- label_groups[[label]]
+    if (label %in% names(lower_bounds)) {
+      previous_lower <- if (group %in% names(group_lower_bounds)) group_lower_bounds[[group]] else -Inf
+      group_lower_bounds[[group]] <- max(previous_lower, lower_bounds[[label]])
+    }
+    if (label %in% names(upper_bounds)) {
+      previous_upper <- if (group %in% names(group_upper_bounds)) group_upper_bounds[[group]] else Inf
+      group_upper_bounds[[group]] <- min(previous_upper, upper_bounds[[label]])
+    }
+  }
+  overlapping_bounds <- intersect(names(group_lower_bounds), names(group_upper_bounds))
+  if (length(overlapping_bounds) && any(group_lower_bounds[overlapping_bounds] > group_upper_bounds[overlapping_bounds])) {
     return(NULL)
   }
 
@@ -788,12 +874,13 @@
     free <- 0L
 
     if (row$is_free) {
-      if (nzchar(row$label) && row$label %in% names(free_labels)) {
-        free <- free_labels[[row$label]]
+      free_key <- if (nzchar(row$label)) label_groups[[row$label]] else ""
+      if (nzchar(free_key) && free_key %in% names(free_labels)) {
+        free <- free_labels[[free_key]]
       } else {
         free <- next_free
-        if (nzchar(row$label)) {
-          free_labels[[row$label]] <- free
+        if (nzchar(free_key)) {
+          free_labels[[free_key]] <- free
         }
         next_free <- next_free + 1L
       }
@@ -819,8 +906,13 @@
       ustart = if (row$is_free) row$start_value else row$fixed_value,
       exo = 0L,
       label = row$label,
-      lower = if (nzchar(row$label) && row$label %in% names(lower_bounds)) {
-        lower_bounds[[row$label]]
+      lower = if (nzchar(row$label) && label_groups[[row$label]] %in% names(group_lower_bounds)) {
+        group_lower_bounds[[label_groups[[row$label]]]]
+      } else {
+        NA_real_
+      },
+      upper = if (nzchar(row$label) && label_groups[[row$label]] %in% names(group_upper_bounds)) {
+        group_upper_bounds[[label_groups[[row$label]]]]
       } else {
         NA_real_
       },
@@ -832,7 +924,36 @@
     )
   }
 
-  .lavaan_fast_append_defined_rows(do.call(rbind, par_rows), definitions)
+  par_table <- do.call(rbind, par_rows)
+  if (length(equalities)) {
+    equality_rows <- lapply(seq_along(equalities), function(idx) {
+      equality <- equalities[[idx]]
+      row_idx <- nrow(par_table) + idx
+      data.frame(
+        id = row_idx,
+        lhs = equality$lhs,
+        op = "==",
+        rhs = equality$rhs,
+        user = 1L,
+        block = 1L,
+        group = 1L,
+        free = 0L,
+        ustart = NA_real_,
+        exo = 0L,
+        label = "",
+        lower = NA_real_,
+        upper = NA_real_,
+        plabel = "",
+        start = 0,
+        est = 0,
+        se = 0,
+        stringsAsFactors = FALSE
+      )
+    })
+    par_table <- rbind(par_table, do.call(rbind, equality_rows))
+  }
+
+  .lavaan_fast_append_defined_rows(par_table, definitions)
 }
 
 .one_factor_latent_name <- function(model) {
@@ -2366,6 +2487,14 @@ parTable_rust <- function(object, ...) {
       par_table[-seq_len(insert_after)]
     )
   }
+  if (!"upper" %in% names(par_table)) {
+    insert_after <- match("lower", names(par_table))
+    par_table <- cbind(
+      par_table[seq_len(insert_after)],
+      upper = rep(NA_real_, nrow(par_table)),
+      par_table[-seq_len(insert_after)]
+    )
+  }
 
   par_table
 }
@@ -2417,7 +2546,7 @@ standardizedSolution_rust <- function(object, ...) {
     names(variable_sd) <- compiled$variable_names
 
     est.std <- par_table$est
-    structural_rows <- which(par_table$op != ":=")
+    structural_rows <- which(par_table$op %in% c("=~", "~", "~~"))
     for (row_idx in structural_rows) {
       lhs <- par_table$lhs[[row_idx]]
       rhs <- par_table$rhs[[row_idx]]

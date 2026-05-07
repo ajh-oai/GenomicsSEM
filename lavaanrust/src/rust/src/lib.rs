@@ -1375,6 +1375,7 @@ fn evaluate_ram_surfaces(
 /// @param free_row_offsets Offsets into `free_row_indices` for each free parameter.
 /// @param free_row_indices Flattened 1-based row indices grouped by free parameter.
 /// @param lower_bounds Lower bound for each free parameter.
+/// @param upper_bounds Upper bound for each free parameter.
 /// @param n_variables Number of variables in the full RAM system.
 /// @param max_iter Maximum optimizer iterations.
 /// @param tol Convergence tolerance.
@@ -1393,6 +1394,7 @@ fn fit_ram_dwls(
     free_row_offsets: Integers,
     free_row_indices: Integers,
     lower_bounds: Doubles,
+    upper_bounds: Doubles,
     n_variables: i32,
     max_iter: i32,
     tol: f64,
@@ -1421,6 +1423,7 @@ fn fit_ram_dwls(
         .map(|value| value.0)
         .collect::<Vec<_>>();
     let lower_bounds = lower_bounds.iter().map(|value| value.0).collect::<Vec<_>>();
+    let upper_bounds = upper_bounds.iter().map(|value| value.0).collect::<Vec<_>>();
     let observed_indices = validate_ram_indices(
         &lhs_index,
         &rhs_index,
@@ -1440,6 +1443,16 @@ fn fit_ram_dwls(
     if lower_bounds.len() != initial_free_values.len() {
         return Err(Error::Other("lower_bounds has the wrong size".into()));
     }
+    if upper_bounds.len() != initial_free_values.len() {
+        return Err(Error::Other("upper_bounds has the wrong size".into()));
+    }
+    if lower_bounds
+        .iter()
+        .zip(upper_bounds.iter())
+        .any(|(lower, upper)| lower > upper)
+    {
+        return Err(Error::Other("lower_bounds exceed upper_bounds".into()));
+    }
 
     let n_observed = observed_indices.len();
     let n_stats = n_observed * (n_observed + 1) / 2;
@@ -1458,8 +1471,8 @@ fn fit_ram_dwls(
     let wls_v = from_col_major(&wls_values, n_stats, n_stats);
     let observed = vech(&sample_cov);
     let mut params = DVector::from_vec(initial_free_values);
-    for (idx, lower_bound) in lower_bounds.iter().enumerate() {
-        params[idx] = params[idx].max(*lower_bound);
+    for idx in 0..params.len() {
+        params[idx] = params[idx].max(lower_bounds[idx]).min(upper_bounds[idx]);
     }
     let mut damping = 1e-6;
     let mut converged = false;
@@ -1497,8 +1510,10 @@ fn fit_ram_dwls(
         let old_objective = 0.5 * residual.dot(&(&wls_v * &residual));
         let mut next_params = &params + &step;
 
-        for (idx, lower_bound) in lower_bounds.iter().enumerate() {
-            next_params[idx] = next_params[idx].max(*lower_bound);
+        for idx in 0..next_params.len() {
+            next_params[idx] = next_params[idx]
+                .max(lower_bounds[idx])
+                .min(upper_bounds[idx]);
         }
 
         let next_implied = ram_implied_from_rows(

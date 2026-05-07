@@ -60,6 +60,53 @@ user_gwas_wrapper_fixture <- function() {
   )
 }
 
+two_factor_wrapper_fixture <- function() {
+  traits <- c("A", "B", "C", "D", "E", "F")
+  s_ld <- matrix(0.18, nrow = 6L, ncol = 6L, dimnames = list(traits, traits))
+  s_ld[1:3, 1:3] <- 0.45
+  s_ld[4:6, 4:6] <- 0.40
+  diag(s_ld) <- 1
+  i_ld <- matrix(0.02, nrow = 6L, ncol = 6L, dimnames = list(traits, traits))
+  diag(i_ld) <- 1.05
+  snps <- data.frame(
+    SNP = c("rs1", "rs2"),
+    CHR = c(1L, 1L),
+    BP = c(1L, 2L),
+    MAF = c(0.30, 0.20),
+    A1 = c("A", "A"),
+    A2 = c("G", "G"),
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+  for (trait in traits) {
+    snps[[paste0("beta.", trait)]] <- c(0.02, -0.01)
+    snps[[paste0("se.", trait)]] <- c(0.05, 0.06)
+  }
+
+  list(
+    covstruc = list(
+      V = diag(21L),
+      S = s_ld,
+      I = i_ld
+    ),
+    SNPs = snps,
+    model = paste(
+      "F1 =~ A + B + C",
+      "F2 =~ D + E + F",
+      "F1 ~~ F2",
+      sep = "\n"
+    ),
+    gwas_model = paste(
+      "F1 =~ A + B + C",
+      "F2 =~ D + E + F",
+      "F1 ~~ F2",
+      "F1 ~ SNP",
+      "F2 ~ SNP",
+      sep = "\n"
+    )
+  )
+}
+
 run_user_gwas_wrapper <- function(fun, fixture, model, std_lv, fix_measurement, q_snp) {
   result <- NULL
   utils::capture.output({
@@ -78,6 +125,22 @@ run_user_gwas_wrapper <- function(fun, fixture, model, std_lv, fix_measurement, 
   })
 
   do.call(rbind, result)
+}
+
+run_user_model_wrapper <- function(fun, fixture, model, std_lv) {
+  result <- NULL
+  utils::capture.output({
+    result <- suppressWarnings(fun(
+      covstruc = fixture$covstruc,
+      model = model,
+      estimation = "DWLS",
+      std.lv = std_lv,
+      imp_cov = FALSE,
+      fix_resid = TRUE
+    ))
+  })
+
+  result$results
 }
 
 user_gwas_row_keys <- function(result) {

@@ -68,7 +68,8 @@ userGWAS_rust <- function(...) {
   twas <- if ("TWAS" %in% names(dots)) dots$TWAS else formals(userGWAS)$TWAS
 
   # Supported native slice:
-  # - simple one-factor SNP models such as `F1 =~ A + B + C` plus `F1 ~ SNP`
+  # - generic DWLS RAM models accepted by `lavaanrust`, including the current
+  #   one-factor and two-factor workflow fixtures
   # - either `parallel = TRUE/FALSE`
   # - `estimation = "DWLS"`
   # - `TWAS = FALSE`

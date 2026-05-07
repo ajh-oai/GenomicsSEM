@@ -1020,3 +1020,69 @@ either loading-identification convention, plus a meaningfully broader generic
 workflow with labeled parameters and a defined parameter. That makes the
 generic compiler path part of the real wrapper contract rather than just a
 standalone evaluator experiment.
+
+## 2026-05-06 17:06 PDT
+
+### Broader surface coverage
+
+- Promoted the ad hoc multi-factor probes into top-level wrapper regressions:
+  - `userGWAS_rust()` now has formal two-factor coverage across
+    `std.lv = TRUE/FALSE`, `fix_measurement = TRUE/FALSE`, and
+    `Q_SNP = TRUE/FALSE`
+  - `usermodel_rust()` now has formal two-factor coverage under both
+    identification conventions
+- Added `tools/bench_lavaan_rust_surface_matrix.R`, a sequential benchmark
+  harness that covers:
+  - one-factor and two-factor `usermodel()` cases
+  - the full simple one-factor `userGWAS()` matrix
+  - flexible one-factor `userGWAS()` with labels, a direct SNP effect, and `:=`
+  - the full two-factor `userGWAS()` matrix
+
+### Richer constraints
+
+- Expanded the generic parser from lower-bound-only support to simple symbolic
+  box constraints and label equalities:
+  - lower bounds via `>`
+  - upper bounds via `<`
+  - explicit equalities such as `l2 == l3`
+- Generalized the Rust RAM optimizer from lower-bound projection to box-bound
+  projection.
+- Kept the boundary deliberate: this packet supports scalar bounds and simple
+  label equalities, not arbitrary nonlinear constraint expressions.
+
+### Validation
+
+- Local regression suites:
+  - `lavaanrust/tests/testthat`: `116` passing tests
+  - top-level `GenomicSEM` wrapper tests: `42` passing expectations
+- Two-factor end-to-end `userGWAS()` smoke before formalizing the tests:
+  - all 8 option cells preserved row order exactly
+  - max old-vs-rust absolute difference across the matrix: `6.12e-08`
+- New constraint regressions cover:
+  - box-bound parsing and propagation across equality-linked labels
+  - upper-bound enforcement in the generic fitter
+  - rejection of incompatible bound sets
+
+### Local benchmark smoke
+
+`tools/bench_lavaan_rust_surface_matrix.R n_snp=20 repeats=1`,
+macOS laptop, 2026-05-06:
+
+| Workflow surface | lavaan | rust-backed | Speedup |
+| --- | ---: | ---: | ---: |
+| one-factor `usermodel()`, `std.lv = FALSE` | `0.064 s` | `0.005 s` | `12.80x` |
+| two-factor `usermodel()`, `std.lv = FALSE` | `0.072 s` | `0.022 s` | `3.27x` |
+| simple one-factor `userGWAS()`, `std.lv = FALSE`, `fix_measurement = FALSE`, `Q_SNP = FALSE` | `0.433 s` | `0.040 s` | `10.83x` |
+| flexible one-factor `userGWAS()`, `std.lv = TRUE`, `fix_measurement = FALSE` | `0.406 s` | `0.058 s` | `7.00x` |
+| two-factor `userGWAS()`, `std.lv = FALSE`, `fix_measurement = FALSE`, `Q_SNP = FALSE` | `0.508 s` | `0.068 s` | `7.47x` |
+
+This is a surface-coverage smoke, not the release benchmark suite. Its purpose
+is to keep broader supported paths measured while the remote scaling benchmark
+continues to cover the heavier one-factor GWAS workloads.
+
+### Coverage significance
+
+The branch is no longer only a one-factor backend experiment. The generic path
+now has explicit wrapper-level coverage for a broader multi-factor workflow and
+supports the next useful slice of lavaan's symbolic layer while still keeping
+unsupported nonlinear constraints out of scope.

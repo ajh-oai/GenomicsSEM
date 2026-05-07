@@ -105,6 +105,32 @@ test_that("lavaan_fast string parser handles modifiers and repeated terms", {
   expect_equal(compiled$free_lower_bounds, c(-Inf, -Inf, -Inf, 0.001, 1e-10, 1e-10))
 })
 
+test_that("lavaan_fast parser supports box bounds and explicit label equalities", {
+  fixture <- usermodel_fixture()
+  model <- paste(
+    "F1 =~ NA*A + l2*B + l3*C",
+    "F1 ~~ 1*F1",
+    "l2 > .1",
+    "l3 < 2",
+    "l2 == l3",
+    sep = "\n"
+  )
+  parsed <- lavaanrust:::.lavaan_fast_parse_model_string(model, fixture$sample_cov)
+  loading_rows <- which(parsed$op == "=~")
+  compiled <- lavaanrust:::.lavaan_fast_compile_par_table(
+    parsed,
+    colnames(fixture$sample_cov)
+  )
+
+  expect_equal(parsed$free[loading_rows], c(1L, 2L, 2L))
+  expect_equal(parsed$lower[loading_rows], c(NA, 0.1, 0.1))
+  expect_equal(parsed$upper[loading_rows], c(NA, 2, 2))
+  expect_equal(parsed$lhs[parsed$op == "=="], "l2")
+  expect_equal(parsed$rhs[parsed$op == "=="], "l3")
+  expect_equal(compiled$free_lower_bounds[[2L]], 0.1)
+  expect_equal(compiled$free_upper_bounds[[2L]], 2)
+})
+
 test_that("lavaan_fast generic string path fits labeled direct-effect RAM models", {
   fixture <- user_gwas_fixture()
   model <- paste(
@@ -154,6 +180,25 @@ test_that("lavaan_fast generic string path enforces simple lower bounds", {
   )
 
   expect_equal(lavaanrust::parTable_rust(fit)$est, 1.5, tolerance = 1e-10)
+})
+
+test_that("lavaan_fast generic string path enforces upper bounds", {
+  sample_cov <- matrix(4, nrow = 1L, dimnames = list("A", "A"))
+  fit <- lavaanrust::sem_rust(
+    paste("A ~~ rvA*A", "rvA < 1.5", sep = "\n"),
+    sample.cov = sample_cov,
+    estimator = "DWLS",
+    WLS.V = matrix(1, nrow = 1L)
+  )
+
+  expect_equal(lavaanrust::parTable_rust(fit)$est[[1L]], 1.5, tolerance = 1e-10)
+})
+
+test_that("lavaan_fast parser rejects incompatible box bounds", {
+  sample_cov <- matrix(1, nrow = 1L, dimnames = list("A", "A"))
+  model <- paste("A ~~ rvA*A", "rvA > 2", "rvA < 1", sep = "\n")
+
+  expect_null(lavaanrust:::.lavaan_fast_parse_model_string(model, sample_cov))
 })
 
 test_that("lavaan_fast generic parser auto-expands marker-scaled shorthand", {
@@ -247,7 +292,7 @@ test_that("lavaan_fast normalizes stale unlabeled free ids like lavaan", {
   expect_equal(labeled_normalized$free[c(4L, 8L)], c(1L, 1L))
 })
 
-test_that("parTable_rust adds lower bounds to specialized fit tables", {
+test_that("parTable_rust adds bound columns to specialized fit tables", {
   fixture <- user_gwas_fixture()
   fit <- lavaanrust::sem_rust(
     fixture$model,
@@ -258,8 +303,11 @@ test_that("parTable_rust adds lower bounds to specialized fit tables", {
   par_table <- lavaanrust::parTable_rust(fit)
 
   expect_true("lower" %in% names(par_table))
+  expect_true("upper" %in% names(par_table))
   expect_equal(names(par_table)[match("label", names(par_table)) + 1L], "lower")
+  expect_equal(names(par_table)[match("lower", names(par_table)) + 1L], "upper")
   expect_true(all(is.na(par_table$lower)))
+  expect_true(all(is.na(par_table$upper)))
 })
 
 test_that("lavaan_fast generic parser tolerates row-only covariance names", {
@@ -379,7 +427,7 @@ test_that("lavaan_fast compiler rejects unsupported operators", {
     transform(
       par_table[1L, , drop = FALSE],
       lhs = "ghost",
-      op = "==",
+      op = "<~",
       rhs = "F1~SNP",
       free = 0L
     )

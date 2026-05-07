@@ -21,6 +21,7 @@
   if (!is.data.frame(par_table)) {
     stop("lavaan_fast compiler expects a data.frame parameter table.", call. = FALSE)
   }
+  par_table <- .lavaan_fast_normalize_free_ids(par_table)
 
   missing_columns <- setdiff(.lavaan_fast_required_columns, names(par_table))
   if (length(missing_columns)) {
@@ -37,7 +38,7 @@
     stop("lavaan_fast compiler requires non-empty observed variable names.", call. = FALSE)
   }
 
-  supported_rows <- par_table$op %in% c("=~", "~", "~~", ":=")
+  supported_rows <- par_table$op %in% c("=~", "~", "~~", ":=", "==")
   if (!all(supported_rows)) {
     stop(
       sprintf(
@@ -48,7 +49,7 @@
     )
   }
 
-  structural_row_indices <- which(par_table$op != ":=")
+  structural_row_indices <- which(par_table$op %in% c("=~", "~", "~~"))
   if (!length(structural_row_indices)) {
     stop("lavaan_fast compiler requires at least one structural row.", call. = FALSE)
   }
@@ -127,6 +128,11 @@
   } else {
     rep(NA_real_, nrow(structural_par_table))
   }
+  row_upper_bounds <- if ("upper" %in% names(structural_par_table)) {
+    as.double(structural_par_table$upper)
+  } else {
+    rep(NA_real_, nrow(structural_par_table))
+  }
   free_lower_bounds <- vapply(seq_along(free_ids), function(free_position) {
     rows <- free_row_groups[[free_position]]
     lower <- -Inf
@@ -143,6 +149,19 @@
 
     lower
   }, numeric(1L))
+  free_upper_bounds <- vapply(seq_along(free_ids), function(free_position) {
+    rows <- free_row_groups[[free_position]]
+    explicit <- row_upper_bounds[rows]
+    explicit <- explicit[is.finite(explicit)]
+    if (length(explicit)) {
+      min(explicit)
+    } else {
+      Inf
+    }
+  }, numeric(1L))
+  if (any(free_lower_bounds > free_upper_bounds)) {
+    stop("lavaan_fast compiler found incompatible lower and upper bounds.", call. = FALSE)
+  }
 
   structure(
     list(
@@ -152,6 +171,7 @@
       par_table = as.data.frame(structural_par_table, stringsAsFactors = FALSE),
       structural_row_indices = as.integer(structural_row_indices),
       defined_row_indices = as.integer(which(par_table$op == ":=")),
+      constraint_row_indices = as.integer(which(par_table$op == "==")),
       row_kind = row_kind,
       op_code = op_code,
       lhs_index = lhs_index,
@@ -168,6 +188,7 @@
       free_row_indices = free_row_indices,
       free_labels = free_labels,
       free_lower_bounds = free_lower_bounds,
+      free_upper_bounds = free_upper_bounds,
       stat_names = stat_names,
       n_variables = length(variable_names),
       n_observed = length(observed_names),
@@ -332,6 +353,7 @@
     compiled$free_row_offsets,
     compiled$free_row_indices,
     as.double(compiled$free_lower_bounds),
+    as.double(compiled$free_upper_bounds),
     as.integer(compiled$n_variables),
     as.integer(max_iter),
     tol
