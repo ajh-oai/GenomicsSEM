@@ -110,6 +110,46 @@ mod dwls_weight_tests {
     }
 }
 
+#[cfg(test)]
+mod ram_surface_tests {
+    use super::*;
+
+    #[test]
+    fn sparse_rank_one_vech_matches_dense_symmetric_outer() {
+        let left = DMatrix::from_column_slice(4, 1, &[1.0, 0.0, 2.0, 0.0]);
+        let right = DMatrix::from_column_slice(4, 1, &[0.0, 3.0, 4.0, 0.0]);
+        let mut sparse = DVector::zeros(10);
+        let left_support = column_supports(&left);
+        let right_support = column_supports(&right);
+
+        add_symmetric_outer_vech(
+            &mut sparse.as_view_mut(),
+            &left,
+            0,
+            &left_support[0],
+            &right,
+            0,
+            &right_support[0],
+            4,
+        );
+
+        let dense = &left * right.transpose() + &right * left.transpose();
+        assert_eq!(sparse, vech(&dense));
+    }
+
+    #[test]
+    fn sparse_self_outer_vech_matches_dense_outer() {
+        let matrix = DMatrix::from_column_slice(4, 1, &[1.0, 0.0, 2.0, 0.0]);
+        let mut sparse = DVector::zeros(10);
+        let support = column_supports(&matrix);
+
+        add_self_outer_vech(&mut sparse.as_view_mut(), &matrix, 0, &support[0], 4);
+
+        let dense = &matrix * matrix.transpose();
+        assert_eq!(sparse, vech(&dense));
+    }
+}
+
 fn implied_one_factor(loadings: &DVector<f64>, residuals: &DVector<f64>) -> DMatrix<f64> {
     let mut implied = loadings * loadings.transpose();
 
@@ -439,13 +479,12 @@ fn from_vech(values: &DVector<f64>, n: usize) -> DMatrix<f64> {
     matrix
 }
 
-fn select_observed(matrix: &DMatrix<f64>, observed_indices: &[usize]) -> DMatrix<f64> {
-    let n_observed = observed_indices.len();
-    let mut selected = DMatrix::<f64>::zeros(n_observed, n_observed);
+fn select_rows(matrix: &DMatrix<f64>, row_indices: &[usize]) -> DMatrix<f64> {
+    let mut selected = DMatrix::<f64>::zeros(row_indices.len(), matrix.ncols());
 
-    for (out_row, source_row) in observed_indices.iter().enumerate() {
-        for (out_col, source_col) in observed_indices.iter().enumerate() {
-            selected[(out_row, out_col)] = matrix[(*source_row, *source_col)];
+    for (out_row, source_row) in row_indices.iter().enumerate() {
+        for col in 0..matrix.ncols() {
+            selected[(out_row, col)] = matrix[(*source_row, col)];
         }
     }
 
@@ -461,10 +500,12 @@ fn implied_ram(
     let Some(inverse) = (identity - directed).try_inverse() else {
         return Err(Error::Other("RAM solve failed because I - A is singular".into()));
     };
-    let full_implied = &inverse * covariance * inverse.transpose();
-    let implied = select_observed(&full_implied, observed_indices);
+    let observed_inverse = select_rows(&inverse, observed_indices);
+    let full_to_observed = &inverse * covariance * observed_inverse.transpose();
+    let implied = select_rows(&full_to_observed, observed_indices);
+    let implied_by_variable = full_to_observed.transpose();
 
-    Ok((implied, full_implied, inverse))
+    Ok((implied, implied_by_variable, observed_inverse))
 }
 
 fn implied_ram_observed(
@@ -629,59 +670,133 @@ fn ram_delta_from_rows(
     op_code: &[i32],
     free_row_offsets: &[i32],
     free_row_indices: &[i32],
-    full_implied: &DMatrix<f64>,
-    inverse: &DMatrix<f64>,
-    observed_indices: &[usize],
+    implied_by_variable: &DMatrix<f64>,
+    observed_inverse: &DMatrix<f64>,
     n_free: usize,
 ) -> DMatrix<f64> {
-    let n_observed = observed_indices.len();
+    let n_observed = observed_inverse.nrows();
     let n_stats = n_observed * (n_observed + 1) / 2;
     let mut delta = DMatrix::<f64>::zeros(n_stats, n_free);
+    let implied_supports = column_supports(implied_by_variable);
+    let inverse_supports = column_supports(observed_inverse);
 
     for free_position in 0..n_free {
         let start = free_row_offsets[free_position] as usize;
         let end = free_row_offsets[free_position + 1] as usize;
-        let mut stat_row = 0;
+        let mut column = delta.column_mut(free_position);
 
-        for observed_col in 0..n_observed {
-            let source_col = observed_indices[observed_col];
+        for flat_idx in start..end {
+            let row_idx = free_row_indices[flat_idx] as usize - 1;
+            let lhs = lhs_index[row_idx] as usize - 1;
+            let rhs = rhs_index[row_idx] as usize - 1;
 
-            for observed_row in observed_col..n_observed {
-                let source_row = observed_indices[observed_row];
-                let mut derivative = 0.0;
-
-                for flat_idx in start..end {
-                    let row_idx = free_row_indices[flat_idx] as usize - 1;
-                    let lhs = lhs_index[row_idx] as usize - 1;
-                    let rhs = rhs_index[row_idx] as usize - 1;
-
-                    match op_code[row_idx] {
-                        1 => {
-                            derivative += inverse[(source_row, rhs)] * full_implied[(lhs, source_col)]
-                                + full_implied[(lhs, source_row)] * inverse[(source_col, rhs)];
-                        }
-                        2 => {
-                            derivative += inverse[(source_row, lhs)] * full_implied[(rhs, source_col)]
-                                + full_implied[(rhs, source_row)] * inverse[(source_col, lhs)];
-                        }
-                        3 if lhs == rhs => {
-                            derivative += inverse[(source_row, lhs)] * inverse[(source_col, lhs)];
-                        }
-                        3 => {
-                            derivative += inverse[(source_row, lhs)] * inverse[(source_col, rhs)]
-                                + inverse[(source_row, rhs)] * inverse[(source_col, lhs)];
-                        }
-                        _ => unreachable!(),
-                    }
+            match op_code[row_idx] {
+                1 => {
+                    add_symmetric_outer_vech(
+                        &mut column,
+                        observed_inverse,
+                        rhs,
+                        &inverse_supports[rhs],
+                        implied_by_variable,
+                        lhs,
+                        &implied_supports[lhs],
+                        n_observed,
+                    );
                 }
-
-                delta[(stat_row, free_position)] = derivative;
-                stat_row += 1;
+                2 => {
+                    add_symmetric_outer_vech(
+                        &mut column,
+                        observed_inverse,
+                        lhs,
+                        &inverse_supports[lhs],
+                        implied_by_variable,
+                        rhs,
+                        &implied_supports[rhs],
+                        n_observed,
+                    );
+                }
+                3 if lhs == rhs => {
+                    add_self_outer_vech(
+                        &mut column,
+                        observed_inverse,
+                        lhs,
+                        &inverse_supports[lhs],
+                        n_observed,
+                    );
+                }
+                3 => {
+                    add_symmetric_outer_vech(
+                        &mut column,
+                        observed_inverse,
+                        lhs,
+                        &inverse_supports[lhs],
+                        observed_inverse,
+                        rhs,
+                        &inverse_supports[rhs],
+                        n_observed,
+                    );
+                }
+                _ => unreachable!(),
             }
         }
     }
 
     delta
+}
+
+fn column_supports(matrix: &DMatrix<f64>) -> Vec<Vec<usize>> {
+    (0..matrix.ncols())
+        .map(|col| {
+            (0..matrix.nrows())
+                .filter(|row| matrix[(*row, col)] != 0.0)
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn vech_index(row: usize, col: usize, n_observed: usize) -> usize {
+    let (row, col) = if row >= col { (row, col) } else { (col, row) };
+    col * n_observed - col * (col.saturating_sub(1)) / 2 + (row - col)
+}
+
+fn add_symmetric_outer_vech(
+    target: &mut nalgebra::DVectorViewMut<'_, f64>,
+    left: &DMatrix<f64>,
+    left_col: usize,
+    left_support: &[usize],
+    right: &DMatrix<f64>,
+    right_col: usize,
+    right_support: &[usize],
+    n_observed: usize,
+) {
+    for &left_row in left_support {
+        let left_value = left[(left_row, left_col)];
+        for &right_row in right_support {
+            let contribution = left_value * right[(right_row, right_col)];
+            let index = vech_index(left_row, right_row, n_observed);
+            target[index] += if left_row == right_row {
+                2.0 * contribution
+            } else {
+                contribution
+            };
+        }
+    }
+}
+
+fn add_self_outer_vech(
+    target: &mut nalgebra::DVectorViewMut<'_, f64>,
+    matrix: &DMatrix<f64>,
+    col: usize,
+    support: &[usize],
+    n_observed: usize,
+) {
+    for (support_col, &observed_col) in support.iter().enumerate() {
+        let col_value = matrix[(observed_col, col)];
+        for &observed_row in &support[support_col..] {
+            let index = vech_index(observed_row, observed_col, n_observed);
+            target[index] += matrix[(observed_row, col)] * col_value;
+        }
+    }
 }
 
 fn ram_surfaces_from_rows(
@@ -705,16 +820,16 @@ fn ram_surfaces_from_rows(
         free_values,
         n_variables,
     );
-    let (implied, full_implied, inverse) = implied_ram(&directed, &covariance, observed_indices)?;
+    let (implied, implied_by_variable, observed_inverse) =
+        implied_ram(&directed, &covariance, observed_indices)?;
     let delta = ram_delta_from_rows(
         lhs_index,
         rhs_index,
         op_code,
         free_row_offsets,
         free_row_indices,
-        &full_implied,
-        &inverse,
-        observed_indices,
+        &implied_by_variable,
+        &observed_inverse,
         free_values.len(),
     );
 
