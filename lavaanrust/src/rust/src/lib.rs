@@ -22,6 +22,94 @@ fn vech(matrix: &DMatrix<f64>) -> DVector<f64> {
     DVector::from_vec(values)
 }
 
+enum DwlsWeights {
+    Diagonal(DVector<f64>),
+    Dense(DMatrix<f64>),
+}
+
+impl DwlsWeights {
+    fn from_col_major(values: &[f64], n_stats: usize) -> Self {
+        let matrix = from_col_major(values, n_stats, n_stats);
+        if (0..n_stats).all(|col| {
+            (0..n_stats).all(|row| row == col || matrix[(row, col)] == 0.0)
+        }) {
+            Self::Diagonal(matrix.diagonal())
+        } else {
+            Self::Dense(matrix)
+        }
+    }
+
+    fn apply_vector(&self, vector: &DVector<f64>) -> DVector<f64> {
+        match self {
+            Self::Diagonal(diagonal) => diagonal.component_mul(vector),
+            Self::Dense(matrix) => matrix * vector,
+        }
+    }
+
+    fn apply_matrix(&self, matrix: &DMatrix<f64>) -> DMatrix<f64> {
+        match self {
+            Self::Diagonal(diagonal) => {
+                let mut weighted = matrix.clone();
+                for row in 0..weighted.nrows() {
+                    weighted.row_mut(row).scale_mut(diagonal[row]);
+                }
+                weighted
+            }
+            Self::Dense(weights) => weights * matrix,
+        }
+    }
+
+    fn objective(&self, residual: &DVector<f64>) -> f64 {
+        0.5 * residual.dot(&self.apply_vector(residual))
+    }
+}
+
+#[cfg(test)]
+mod dwls_weight_tests {
+    use super::*;
+
+    #[test]
+    fn diagonal_weights_scale_without_dense_multiplication() {
+        let weights = DwlsWeights::from_col_major(
+            &[
+                2.0, 0.0, 0.0, //
+                0.0, 3.0, 0.0, //
+                0.0, 0.0, 4.0,
+            ],
+            3,
+        );
+        let vector = DVector::from_vec(vec![1.0, 2.0, 3.0]);
+        let matrix = DMatrix::from_row_slice(3, 2, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+        assert!(matches!(&weights, DwlsWeights::Diagonal(_)));
+        assert_eq!(
+            weights.apply_vector(&vector),
+            DVector::from_vec(vec![2.0, 6.0, 12.0])
+        );
+        assert_eq!(
+            weights.apply_matrix(&matrix),
+            DMatrix::from_row_slice(3, 2, &[2.0, 4.0, 9.0, 12.0, 20.0, 24.0])
+        );
+    }
+
+    #[test]
+    fn dense_weights_preserve_general_matrix_products() {
+        let values = vec![
+            2.0, 0.5, 0.0, //
+            0.5, 3.0, 0.25, //
+            0.0, 0.25, 4.0,
+        ];
+        let weights = DwlsWeights::from_col_major(&values, 3);
+        let dense = from_col_major(&values, 3, 3);
+        let vector = DVector::from_vec(vec![1.0, 2.0, 3.0]);
+        let matrix = DMatrix::from_row_slice(3, 2, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+
+        assert!(matches!(&weights, DwlsWeights::Dense(_)));
+        assert_eq!(weights.apply_vector(&vector), &dense * &vector);
+        assert_eq!(weights.apply_matrix(&matrix), &dense * &matrix);
+    }
+}
+
 fn implied_one_factor(loadings: &DVector<f64>, residuals: &DVector<f64>) -> DMatrix<f64> {
     let mut implied = loadings * loadings.transpose();
 
@@ -693,7 +781,7 @@ fn fit_one_factor_dwls(
     }
 
     let sample_cov = from_col_major(&sample_cov_values, n, n);
-    let wls_v = from_col_major(&wls_values, n_stats, n_stats);
+    let wls_v = DwlsWeights::from_col_major(&wls_values, n_stats);
     let observed = vech(&sample_cov);
     let (mut loadings, mut residuals) = initial_one_factor(&sample_cov);
     let mut damping = 1e-6;
@@ -706,8 +794,10 @@ fn fit_one_factor_dwls(
         let implied = implied_one_factor(&loadings, &residuals);
         let residual = &observed - vech(&implied);
         let delta = delta_one_factor(&loadings);
-        let gradient = delta.transpose() * &wls_v * &residual;
-        let hessian = delta.transpose() * &wls_v * &delta;
+        let weighted_residual = wls_v.apply_vector(&residual);
+        let weighted_delta = wls_v.apply_matrix(&delta);
+        let gradient = delta.transpose() * &weighted_residual;
+        let hessian = delta.transpose() * &weighted_delta;
         let mut regularized = hessian.clone();
 
         for idx in 0..regularized.nrows() {
@@ -719,7 +809,7 @@ fn fit_one_factor_dwls(
             continue;
         };
 
-        let old_objective = 0.5 * residual.dot(&(&wls_v * &residual));
+        let old_objective = 0.5 * residual.dot(&weighted_residual);
         let mut next_loadings = loadings.clone();
         let mut next_residuals = residuals.clone();
 
@@ -730,7 +820,7 @@ fn fit_one_factor_dwls(
 
         let next_implied = implied_one_factor(&next_loadings, &next_residuals);
         let next_residual = &observed - vech(&next_implied);
-        let next_objective = 0.5 * next_residual.dot(&(&wls_v * &next_residual));
+        let next_objective = wls_v.objective(&next_residual);
 
         if next_objective <= old_objective {
             loadings = next_loadings;
@@ -753,11 +843,12 @@ fn fit_one_factor_dwls(
     let implied = implied_one_factor(&loadings, &residuals);
     let residual = &observed - vech(&implied);
     let delta = delta_one_factor(&loadings);
-    let bread = (delta.transpose() * &wls_v * &delta)
+    let weighted_delta = wls_v.apply_matrix(&delta);
+    let bread = (delta.transpose() * &weighted_delta)
         .try_inverse()
         .unwrap_or_else(|| DMatrix::<f64>::zeros(2 * n, 2 * n));
     let naive_se = bread.diagonal().map(|value| value.max(0.0).sqrt());
-    let objective = 0.5 * residual.dot(&(&wls_v * &residual));
+    let objective = wls_v.objective(&residual);
 
     Ok(list!(
         loadings = loadings.as_slice().to_vec(),
@@ -820,7 +911,7 @@ fn fit_observed_covariance_dwls(
     }
 
     let sample_cov = from_col_major(&sample_cov_values, n, n);
-    let wls_v = from_col_major(&wls_values, n_stats, n_stats);
+    let wls_v = DwlsWeights::from_col_major(&wls_values, n_stats);
     let observed = vech(&sample_cov);
     let fixed = DVector::from_vec(fixed_values);
     let free_indices = free_mask_values
@@ -835,8 +926,10 @@ fn fit_observed_covariance_dwls(
     }
 
     let target = observed.clone() - fixed.clone();
-    let hessian = delta.transpose() * &wls_v * &delta;
-    let rhs = delta.transpose() * &wls_v * &target;
+    let weighted_delta = wls_v.apply_matrix(&delta);
+    let weighted_target = wls_v.apply_vector(&target);
+    let hessian = delta.transpose() * &weighted_delta;
+    let rhs = delta.transpose() * &weighted_target;
     let Some(params) = hessian.clone().lu().solve(&rhs) else {
         return Err(Error::Other("observed covariance solve failed".into()));
     };
@@ -848,7 +941,7 @@ fn fit_observed_covariance_dwls(
         .try_inverse()
         .unwrap_or_else(|| DMatrix::<f64>::zeros(free_indices.len(), free_indices.len()));
     let naive_se = bread.diagonal().map(|value| value.max(0.0).sqrt());
-    let objective = 0.5 * residual.dot(&(&wls_v * &residual));
+    let objective = wls_v.objective(&residual);
 
     Ok(list!(
         estimates = params.as_slice().to_vec(),
@@ -898,7 +991,7 @@ fn fit_commonfactor_gwas_dwls(
     }
 
     let sample_cov = from_col_major(&sample_cov_values, n, n);
-    let wls_v = from_col_major(&wls_values, n_stats, n_stats);
+    let wls_v = DwlsWeights::from_col_major(&wls_values, n_stats);
     let observed = vech(&sample_cov);
     let (mut loadings, mut gamma, mut residuals, mut psi, mut phi) =
         initial_commonfactor_gwas(&sample_cov);
@@ -912,8 +1005,10 @@ fn fit_commonfactor_gwas_dwls(
         let implied = implied_commonfactor_gwas(&loadings, gamma, &residuals, psi, phi);
         let residual = &observed - vech(&implied);
         let delta = delta_commonfactor_gwas(&loadings, gamma, psi, phi);
-        let gradient = delta.transpose() * &wls_v * &residual;
-        let hessian = delta.transpose() * &wls_v * &delta;
+        let weighted_residual = wls_v.apply_vector(&residual);
+        let weighted_delta = wls_v.apply_matrix(&delta);
+        let gradient = delta.transpose() * &weighted_residual;
+        let hessian = delta.transpose() * &weighted_delta;
         let mut regularized = hessian.clone();
 
         for idx in 0..regularized.nrows() {
@@ -925,7 +1020,7 @@ fn fit_commonfactor_gwas_dwls(
             continue;
         };
 
-        let old_objective = 0.5 * residual.dot(&(&wls_v * &residual));
+        let old_objective = 0.5 * residual.dot(&weighted_residual);
         let mut next_loadings = loadings.clone();
         let mut next_residuals = residuals.clone();
 
@@ -951,7 +1046,7 @@ fn fit_commonfactor_gwas_dwls(
             next_phi,
         );
         let next_residual = &observed - vech(&next_implied);
-        let next_objective = 0.5 * next_residual.dot(&(&wls_v * &next_residual));
+        let next_objective = wls_v.objective(&next_residual);
 
         if next_objective <= old_objective {
             loadings = next_loadings;
@@ -973,11 +1068,12 @@ fn fit_commonfactor_gwas_dwls(
     let implied = implied_commonfactor_gwas(&loadings, gamma, &residuals, psi, phi);
     let residual = &observed - vech(&implied);
     let delta = delta_commonfactor_gwas(&loadings, gamma, psi, phi);
-    let bread = (delta.transpose() * &wls_v * &delta)
+    let weighted_delta = wls_v.apply_matrix(&delta);
+    let bread = (delta.transpose() * &weighted_delta)
         .try_inverse()
         .unwrap_or_else(|| DMatrix::<f64>::zeros(2 * k + 2, 2 * k + 2));
     let naive_se = bread.diagonal().map(|value| value.max(0.0).sqrt());
-    let objective = 0.5 * residual.dot(&(&wls_v * &residual));
+    let objective = wls_v.objective(&residual);
 
     Ok(list!(
         loadings = loadings.as_slice().to_vec(),
@@ -1051,7 +1147,7 @@ fn fit_commonfactor_gwas_q_dwls(
     }
 
     let sample_cov = from_col_major(&sample_cov_values, n, n);
-    let wls_v = from_col_major(&wls_values, n_stats, n_stats);
+    let wls_v = DwlsWeights::from_col_major(&wls_values, n_stats);
     let observed = vech(&sample_cov);
     let loadings = DVector::from_vec(loadings);
     let mut direct = DVector::from_vec(direct);
@@ -1066,8 +1162,10 @@ fn fit_commonfactor_gwas_q_dwls(
         let implied = implied_commonfactor_gwas_q(&loadings, gamma, &direct, &residuals, psi, phi);
         let residual = &observed - vech(&implied);
         let delta = delta_commonfactor_gwas_q(&loadings, gamma, &direct, phi);
-        let gradient = delta.transpose() * &wls_v * &residual;
-        let hessian = delta.transpose() * &wls_v * &delta;
+        let weighted_residual = wls_v.apply_vector(&residual);
+        let weighted_delta = wls_v.apply_matrix(&delta);
+        let gradient = delta.transpose() * &weighted_residual;
+        let hessian = delta.transpose() * &weighted_delta;
         let mut regularized = hessian.clone();
 
         for idx in 0..regularized.nrows() {
@@ -1079,7 +1177,7 @@ fn fit_commonfactor_gwas_q_dwls(
             continue;
         };
 
-        let old_objective = 0.5 * residual.dot(&(&wls_v * &residual));
+        let old_objective = 0.5 * residual.dot(&weighted_residual);
         let mut next_direct = direct.clone();
         let mut next_residuals = residuals.clone();
 
@@ -1091,7 +1189,7 @@ fn fit_commonfactor_gwas_q_dwls(
         let next_implied =
             implied_commonfactor_gwas_q(&loadings, gamma, &next_direct, &next_residuals, psi, phi);
         let next_residual = &observed - vech(&next_implied);
-        let next_objective = 0.5 * next_residual.dot(&(&wls_v * &next_residual));
+        let next_objective = wls_v.objective(&next_residual);
 
         if next_objective <= old_objective {
             direct = next_direct;
@@ -1110,11 +1208,12 @@ fn fit_commonfactor_gwas_q_dwls(
     let implied = implied_commonfactor_gwas_q(&loadings, gamma, &direct, &residuals, psi, phi);
     let residual = &observed - vech(&implied);
     let delta = delta_commonfactor_gwas_q(&loadings, gamma, &direct, phi);
-    let bread = (delta.transpose() * &wls_v * &delta)
+    let weighted_delta = wls_v.apply_matrix(&delta);
+    let bread = (delta.transpose() * &weighted_delta)
         .try_inverse()
         .unwrap_or_else(|| DMatrix::<f64>::zeros(2 * k, 2 * k));
     let naive_se = bread.diagonal().map(|value| value.max(0.0).sqrt());
-    let objective = 0.5 * residual.dot(&(&wls_v * &residual));
+    let objective = wls_v.objective(&residual);
 
     Ok(list!(
         direct = direct.as_slice().to_vec(),
@@ -1182,7 +1281,7 @@ fn fit_user_gwas_fixed_measurement_dwls(
     }
 
     let sample_cov = from_col_major(&sample_cov_values, n, n);
-    let wls_v = from_col_major(&wls_values, n_stats, n_stats);
+    let wls_v = DwlsWeights::from_col_major(&wls_values, n_stats);
     let observed = vech(&sample_cov);
     let loadings = DVector::from_vec(loadings);
     let mut residuals = DVector::from_vec(residuals);
@@ -1199,8 +1298,10 @@ fn fit_user_gwas_fixed_measurement_dwls(
         let implied = implied_commonfactor_gwas(&loadings, gamma, &residuals, psi, phi);
         let residual = &observed - vech(&implied);
         let delta = delta_user_gwas_fixed_measurement(&loadings, gamma, phi);
-        let gradient = delta.transpose() * &wls_v * &residual;
-        let hessian = delta.transpose() * &wls_v * &delta;
+        let weighted_residual = wls_v.apply_vector(&residual);
+        let weighted_delta = wls_v.apply_matrix(&delta);
+        let gradient = delta.transpose() * &weighted_residual;
+        let hessian = delta.transpose() * &weighted_delta;
         let mut regularized = hessian.clone();
 
         for idx in 0..regularized.nrows() {
@@ -1212,7 +1313,7 @@ fn fit_user_gwas_fixed_measurement_dwls(
             continue;
         };
 
-        let old_objective = 0.5 * residual.dot(&(&wls_v * &residual));
+        let old_objective = 0.5 * residual.dot(&weighted_residual);
         let mut next_residuals = residuals.clone();
 
         for idx in 0..k {
@@ -1230,7 +1331,7 @@ fn fit_user_gwas_fixed_measurement_dwls(
             next_phi,
         );
         let next_residual = &observed - vech(&next_implied);
-        let next_objective = 0.5 * next_residual.dot(&(&wls_v * &next_residual));
+        let next_objective = wls_v.objective(&next_residual);
 
         if next_objective <= old_objective {
             residuals = next_residuals;
@@ -1251,11 +1352,12 @@ fn fit_user_gwas_fixed_measurement_dwls(
     let implied = implied_commonfactor_gwas(&loadings, gamma, &residuals, psi, phi);
     let residual = &observed - vech(&implied);
     let delta = delta_user_gwas_fixed_measurement(&loadings, gamma, phi);
-    let bread = (delta.transpose() * &wls_v * &delta)
+    let weighted_delta = wls_v.apply_matrix(&delta);
+    let bread = (delta.transpose() * &weighted_delta)
         .try_inverse()
         .unwrap_or_else(|| DMatrix::<f64>::zeros(k + 3, k + 3));
     let naive_se = bread.diagonal().map(|value| value.max(0.0).sqrt());
-    let objective = 0.5 * residual.dot(&(&wls_v * &residual));
+    let objective = wls_v.objective(&residual);
 
     Ok(list!(
         residuals = residuals.as_slice().to_vec(),
@@ -1468,7 +1570,7 @@ fn fit_ram_dwls(
     }
 
     let sample_cov = from_col_major(&sample_cov_values, n_observed, n_observed);
-    let wls_v = from_col_major(&wls_values, n_stats, n_stats);
+    let wls_v = DwlsWeights::from_col_major(&wls_values, n_stats);
     let observed = vech(&sample_cov);
     let mut params = DVector::from_vec(initial_free_values);
     for idx in 0..params.len() {
@@ -1494,8 +1596,10 @@ fn fit_ram_dwls(
             n_variables,
         )?;
         let residual = &observed - vech(&implied);
-        let gradient = delta.transpose() * &wls_v * &residual;
-        let hessian = delta.transpose() * &wls_v * &delta;
+        let weighted_residual = wls_v.apply_vector(&residual);
+        let weighted_delta = wls_v.apply_matrix(&delta);
+        let gradient = delta.transpose() * &weighted_residual;
+        let hessian = delta.transpose() * &weighted_delta;
         let mut regularized = hessian.clone();
 
         for idx in 0..regularized.nrows() {
@@ -1507,7 +1611,7 @@ fn fit_ram_dwls(
             continue;
         };
 
-        let old_objective = 0.5 * residual.dot(&(&wls_v * &residual));
+        let old_objective = 0.5 * residual.dot(&weighted_residual);
         let mut next_params = &params + &step;
 
         for idx in 0..next_params.len() {
@@ -1527,7 +1631,7 @@ fn fit_ram_dwls(
             n_variables,
         )?;
         let next_residual = &observed - vech(&next_implied);
-        let next_objective = 0.5 * next_residual.dot(&(&wls_v * &next_residual));
+        let next_objective = wls_v.objective(&next_residual);
 
         if next_objective <= old_objective {
             params = next_params;
@@ -1555,11 +1659,12 @@ fn fit_ram_dwls(
         n_variables,
     )?;
     let residual = &observed - vech(&implied);
-    let bread = (delta.transpose() * &wls_v * &delta)
+    let weighted_delta = wls_v.apply_matrix(&delta);
+    let bread = (delta.transpose() * &weighted_delta)
         .try_inverse()
         .unwrap_or_else(|| DMatrix::<f64>::zeros(params.len(), params.len()));
     let naive_se = bread.diagonal().map(|value| value.max(0.0).sqrt());
-    let objective = 0.5 * residual.dot(&(&wls_v * &residual));
+    let objective = wls_v.objective(&residual);
 
     Ok(list!(
         estimates = params.as_slice().to_vec(),
