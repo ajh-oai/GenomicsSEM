@@ -1086,3 +1086,101 @@ The branch is no longer only a one-factor backend experiment. The generic path
 now has explicit wrapper-level coverage for a broader multi-factor workflow and
 supports the next useful slice of lavaan's symbolic layer while still keeping
 unsupported nonlinear constraints out of scope.
+
+## 2026-05-07 10:50 PDT
+
+### Constrained wrapper coverage
+
+- Added bounded-model regressions through the public wrapper layer:
+  - `usermodel_rust()` now has end-to-end coverage for a labeled residual
+    variance lower bound.
+  - `userGWAS_rust()` now has end-to-end coverage for a labeled loading lower
+    bound.
+- Normalized the wrapper tests so they compare the modeled structural result
+  rather than incidental row-name representation or whether a given installed
+  lavaan build echoes textual bound rows back into the output table.
+- Kept repeated-label equality constraints out of the wrapper regression for
+  this packet after profiling exposed a real compatibility gap:
+  - the generic compiler can fit them
+  - but the public wrappers still do not fully reproduce lavaan's exposed
+    free-parameter / equality-row shape for those models
+  - that should be fixed explicitly rather than hidden inside a loose test
+
+### Broader workflow profiling
+
+Added `tools/profile_lavaan_rust_workflows.R` so broader supported wrappers can
+be profiled one case at a time after a warm-up run:
+
+- `usermodel_bounded`
+- `usergwas_flexible_one_factor`
+- `usergwas_two_factor`
+
+Remote panda/flex 16-CPU profiles on the 20-SNP fixture show the next clear
+optimization target:
+
+- the wrapper-level `userGWAS` machinery still dominates total time
+- the Rust fitter itself is only a small slice of the broad generic wrapper
+  profiles on this small fixture
+- parsing and data-frame assembly remain visible in both the bounded
+  `usermodel()` case and the flexible `userGWAS()` case
+
+That means the next high-impact work should be plan reuse / wrapper assembly,
+not another local optimizer micro-tweak.
+
+### Remote surface smoke
+
+Remote panda/flex 16-CPU pod, `tools/bench_lavaan_rust_surface_matrix.R
+n_snp=20 repeats=1`:
+
+| Workflow | Representative case | lavaan | lavaanrust | Speedup |
+| --- | --- | ---: | ---: | ---: |
+| `usermodel()` | one-factor, `std.lv = FALSE` | `0.140 s` | `0.014 s` | `10.00x` |
+| `usermodel()` | two-factor, `std.lv = FALSE` | `0.164 s` | `0.059 s` | `2.78x` |
+| `userGWAS()` | simple one-factor, `fix_measurement = FALSE`, `Q_SNP = FALSE` | `1.521 s` | `0.114 s` | `13.34x` |
+| `userGWAS()` | flexible one-factor, `fix_measurement = FALSE` | `1.459 s` | `0.158 s` | `9.23x` |
+| `userGWAS()` | two-factor, `fix_measurement = FALSE`, `Q_SNP = FALSE` | `1.725 s` | `0.178 s` | `9.69x` |
+
+The surface smoke remains numerically close to lavaan across the broadened
+fixtures; the largest reported absolute difference in that run was
+`3.09e-05`.
+
+### Parameter-count scaling
+
+Added `tools/bench_lavaan_rust_parameter_scaling.R`, which measures two related
+things on a widening full-covariance family:
+
+1. end-to-end fit time for lavaan vs lavaanrust
+2. raw Rust implied-surface evaluation time with the compiled model held fixed
+
+The widening family spans `10` to `528` free parameters. On the remote
+panda/flex 16-CPU pod:
+
+| Surface | Empirical exponent from `lm(log(time) ~ log(n_free))` | `R^2` |
+| --- | ---: | ---: |
+| lavaan full fit | `0.51` | `0.875` |
+| lavaanrust full fit | `1.08` | `0.994` |
+| lavaanrust raw surface evaluator | `1.39` | `0.939` |
+
+Selected median timings from the same run:
+
+| Free params | lavaan full fit | lavaanrust full fit | lavaanrust surface eval |
+| ---: | ---: | ---: | ---: |
+| `10` | `0.026 s` | `0.014 s` | `0.000016 s` |
+| `78` | `0.040 s` | `0.101 s` | `0.000074 s` |
+| `210` | `0.075 s` | `0.299 s` | `0.000460 s` |
+| `528` | `0.195 s` | `1.051 s` | `0.002862 s` |
+
+This is an empirical widening-family study, not a symbolic proof of asymptotic
+complexity. The useful conclusion is narrower: over the range relevant to the
+current generic evaluator, the Rust backend is not hiding a sudden cubic
+parameter-count cliff, while the raw surface path is already the place where
+superlinear growth becomes visible as model width increases.
+
+### Validation
+
+- Local:
+  - `Rscript -e 'pkgload::load_all(quiet=TRUE); testthat::test_dir("lavaanrust/tests/testthat"); testthat::test_dir("tests/testthat")'`
+  - result: `116` lavaanrust tests and `46` wrapper tests passing
+- Remote panda/flex 16-CPU pod:
+  - `Rscript -e 'library(GenomicSEM); testthat::test_dir("lavaanrust/tests/testthat"); testthat::test_dir("tests/testthat")'`
+  - result: `116` lavaanrust tests and `46` wrapper tests passing
