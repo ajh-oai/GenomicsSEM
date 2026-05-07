@@ -1869,7 +1869,7 @@ fn fit_ram_dwls(
             regularized[(idx, idx)] += damping;
         }
 
-        let Some(step) = regularized.lu().solve(&gradient) else {
+        let Some(step) = solve_damped_normal_equations(&regularized, &gradient) else {
             damping *= 10.0;
             continue;
         };
