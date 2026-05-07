@@ -1186,17 +1186,47 @@ free-parameter count are varied separately?
 The benchmark has two families:
 
 1. `variable_scaling`: a balanced two-factor CFA with no residual covariances,
-   widened from `6` to `32` observed variables. This grows the observed
+   widened from `6` to `48` observed variables. This grows the observed
    covariance dimension while keeping the model nonsaturated and staying on the
    Rust generic RAM path.
-2. `parameter_scaling`: the same two-factor CFA with `20` observed variables
-   held fixed while residual covariance parameters are added from `0` to `112`.
+2. `parameter_scaling`: the same two-factor CFA with `24` observed variables
+   held fixed while residual covariance parameters are added from `0` to `176`.
    This grows free-parameter count without changing the observed dimension or
    the data matrix.
 
 Both backends fit the exact same model/data pair at each point, and the script
 records the Rust model kind so accidental dispatch into a specialized fast path
 is visible rather than inferred after the fact.
+
+Remote panda/flex 16-CPU run, 2026-05-07:
+
+| Family | Axis | lavaan exponent | lavaanrust exponent | lavaanrust raw surface exponent |
+| --- | --- | ---: | ---: | ---: |
+| `variable_scaling` | `n_vars` | `0.73` | `1.38` | `1.87` |
+| `variable_scaling` | `n_free` | `0.76` | `1.43` | `1.93` |
+| `parameter_scaling` | `n_free` | `0.65` | `1.13` | `0.88` |
+
+Selected medians from the same run:
+
+| Family | Shape | lavaan full fit | lavaanrust full fit | lavaanrust raw surface |
+| --- | --- | ---: | ---: | ---: |
+| `variable_scaling` | `6` vars, `13` free | `0.033 s` | `0.017 s` | `0.000018 s` |
+| `variable_scaling` | `24` vars, `49` free | `0.056 s` | `0.059 s` | `0.000125 s` |
+| `variable_scaling` | `48` vars, `97` free | `0.156 s` | `0.269 s` | `0.000809 s` |
+| `parameter_scaling` | `24` vars, `49` free | `0.055 s` | `0.060 s` | `0.000125 s` |
+| `parameter_scaling` | `24` vars, `145` free | `0.091 s` | `0.201 s` | `0.000314 s` |
+| `parameter_scaling` | `24` vars, `225` free | `0.153 s` | `0.363 s` | `0.000477 s` |
+
+All rows in that run stayed on `ram_dwls_generic`, converged in both backends,
+and matched fitted covariance outputs to at most `2.54e-07`.
+
+The matched benchmark changes the interpretation of the earlier saturated
+family sweep. On the generic nonsaturated path, there is not yet evidence that
+lavaanrust has a better asymptotic class than lavaan; if anything, its
+end-to-end full-fit curve is steeper over the current range. The large practical
+speedups elsewhere in the branch therefore come from specialized kernels,
+batched orchestration, lower interpreter overhead, and parallel work, not from
+the generic RAM fallback already having superior scaling.
 
 ### Validation
 

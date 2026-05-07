@@ -7,9 +7,9 @@ suppressPackageStartupMessages({
 
 parse_args <- function(args) {
   values <- list(
-    variable_n_vars = c(6L, 8L, 12L, 16L, 20L, 24L, 28L, 32L),
-    parameter_n_vars = 20L,
-    parameter_extra_covars = c(0L, 16L, 32L, 48L, 64L, 80L, 96L, 112L),
+    variable_n_vars = c(6L, 8L, 12L, 16L, 20L, 24L, 28L, 32L, 40L, 48L),
+    parameter_n_vars = 24L,
+    parameter_extra_covars = c(0L, 24L, 48L, 72L, 96L, 120L, 144L, 176L),
     fit_repeats = 3L,
     surface_repeats = 5L,
     surface_iterations = 1000L,
@@ -211,6 +211,19 @@ summarize_timings <- function(frame, group_columns) {
 fit_scaling <- function(frame, axis, family) {
   subset <- frame[frame$family == family, , drop = FALSE]
   do.call(rbind, lapply(split(subset, subset$backend), function(group) {
+    group <- group[is.finite(group$elapsed_sec) & group$elapsed_sec > 0, , drop = FALSE]
+    if (nrow(group) < 2L || length(unique(group[[axis]])) < 2L) {
+      return(data.frame(
+        family = family,
+        axis = axis,
+        backend = if (nrow(group)) group$backend[[1L]] else NA_character_,
+        intercept = NA_real_,
+        exponent = NA_real_,
+        r_squared = NA_real_,
+        stringsAsFactors = FALSE
+      ))
+    }
+
     fit_data <- data.frame(
       elapsed_sec = group$elapsed_sec,
       axis_value = group[[axis]]
