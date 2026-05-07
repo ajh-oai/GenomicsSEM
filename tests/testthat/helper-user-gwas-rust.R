@@ -49,12 +49,24 @@ user_gwas_wrapper_fixture <- function() {
       "F1 ~ SNP",
       sep = "\n"
     ),
+    bounded_model = paste(
+      "F1 =~ A + l2*B + l3*C",
+      "F1 ~ gamma*SNP",
+      "l2 > .1",
+      sep = "\n"
+    ),
     flexible_model = paste(
       "F1 =~ NA*A + l2*B + l3*C",
       "F1 ~~ 1*F1",
       "F1 ~ gamma*SNP",
       "A ~ direct*SNP",
       "combo := gamma * direct",
+      sep = "\n"
+    ),
+    bounded_usermodel = paste(
+      "F1 =~ A + B + C",
+      "A ~~ rvA*A",
+      "rvA > .001",
       sep = "\n"
     )
   )

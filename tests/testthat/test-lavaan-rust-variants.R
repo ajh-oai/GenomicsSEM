@@ -82,6 +82,33 @@ test_that("userGWAS_rust handles labeled direct effects and defined parameters",
   }
 })
 
+test_that("userGWAS_rust matches lavaan on bounded generic models", {
+  fixture <- user_gwas_wrapper_fixture()
+  old <- run_user_gwas_wrapper(
+    userGWAS,
+    fixture,
+    fixture$bounded_model,
+    std_lv = FALSE,
+    fix_measurement = FALSE,
+    q_snp = FALSE
+  )
+  rust <- run_user_gwas_wrapper(
+    userGWAS_rust,
+    fixture,
+    fixture$bounded_model,
+    std_lv = FALSE,
+    fix_measurement = FALSE,
+    q_snp = FALSE
+  )
+
+  expect_equal(user_gwas_row_keys(rust), user_gwas_row_keys(old))
+  expect_equal(
+    rust[user_gwas_numeric_columns(old)],
+    old[user_gwas_numeric_columns(old)],
+    tolerance = 2e-6
+  )
+})
+
 test_that("userGWAS_rust matches lavaan across two-factor option surfaces", {
   fixture <- two_factor_wrapper_fixture()
   matrix <- expand.grid(
@@ -149,4 +176,27 @@ test_that("usermodel_rust matches lavaan on two-factor models", {
       tolerance = 2e-6
     )
   }
+})
+
+test_that("usermodel_rust matches lavaan on bounded generic models", {
+  fixture <- user_gwas_wrapper_fixture()
+  old <- run_user_model_wrapper(
+    usermodel,
+    fixture,
+    fixture$bounded_usermodel,
+    std_lv = FALSE
+  )
+  rust <- run_user_model_wrapper(
+    usermodel_rust,
+    fixture,
+    fixture$bounded_usermodel,
+    std_lv = FALSE
+  )
+
+  expect_equal(user_gwas_row_keys(rust), user_gwas_row_keys(old))
+  expect_equal(
+    rust[user_gwas_numeric_columns(old)],
+    old[user_gwas_numeric_columns(old)],
+    tolerance = 2e-6
+  )
 })
