@@ -1176,6 +1176,28 @@ current generic evaluator, the Rust backend is not hiding a sudden cubic
 parameter-count cliff, while the raw surface path is already the place where
 superlinear growth becomes visible as model width increases.
 
+### Matched nonsaturated scaling follow-up
+
+Added `tools/bench_lavaan_rust_matched_scaling.R` to answer the more specific
+question the full-covariance benchmark cannot answer cleanly: how do lavaan and
+lavaanrust scale on the same nonsaturated generic family when variable count and
+free-parameter count are varied separately?
+
+The benchmark has two families:
+
+1. `variable_scaling`: a balanced two-factor CFA with no residual covariances,
+   widened from `6` to `32` observed variables. This grows the observed
+   covariance dimension while keeping the model nonsaturated and staying on the
+   Rust generic RAM path.
+2. `parameter_scaling`: the same two-factor CFA with `20` observed variables
+   held fixed while residual covariance parameters are added from `0` to `112`.
+   This grows free-parameter count without changing the observed dimension or
+   the data matrix.
+
+Both backends fit the exact same model/data pair at each point, and the script
+records the Rust model kind so accidental dispatch into a specialized fast path
+is visible rather than inferred after the fact.
+
 ### Validation
 
 - Local:

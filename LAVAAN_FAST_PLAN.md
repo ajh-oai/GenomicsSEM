@@ -69,6 +69,8 @@ the compiler seam before moving solvers onto it.
      Jacobians they never consume
    - done: profile broader supported wrapper workflows before pursuing more
      local optimizer micro-optimizations
+   - done: add a matched nonsaturated scaling benchmark that separates
+     variable-count growth from free-parameter growth
    - next: prioritize reusable compiled plans and wrapper assembly cleanup over
      another local fitter tweak unless a broader profile shows the optimizer has
      become dominant again
