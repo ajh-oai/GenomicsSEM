@@ -2182,7 +2182,7 @@
   latent_cor
 }
 
-.new_lavaan_fast_ram_fit <- function(par_table, sample.cov, WLS.V, compiled, fit) {
+.new_lavaan_fast_ram_fit <- function(par_table, sample.cov, WLS.V, compiled, plan, fit) {
   par_table <- as.data.frame(par_table, stringsAsFactors = FALSE)
   rownames(par_table) <- NULL
   free_rows <- which(!is.na(compiled$free_index))
@@ -2224,10 +2224,56 @@
       "lavaan_rust_model",
       model_kind = "ram_dwls_generic",
       par_table = par_table,
+      compiled = compiled,
+      plan = plan,
       free_values = as.double(fit$estimates),
       def.function = definition_plan$def.function
     )
   )
+}
+
+.lavaan_fast_assert_compatible_data <- function(compiled, sample.cov, WLS.V) {
+  observed_names <- colnames(sample.cov)
+  if (is.null(observed_names)) {
+    observed_names <- rownames(sample.cov)
+  }
+
+  if (
+    !is.matrix(sample.cov) ||
+      !identical(dim(sample.cov), c(compiled$n_observed, compiled$n_observed)) ||
+      !identical(observed_names, compiled$observed_names)
+  ) {
+    stop("lavaan_fast native plan received incompatible observed covariance data.", call. = FALSE)
+  }
+
+  if (
+    !is.matrix(WLS.V) ||
+      !identical(dim(WLS.V), c(compiled$n_stats, compiled$n_stats))
+  ) {
+    stop("lavaan_fast native plan received an incompatible DWLS weight matrix.", call. = FALSE)
+  }
+}
+
+.fit_lavaan_fast_compiled_ram_model <- function(
+  par_table,
+  compiled,
+  plan,
+  sample.cov,
+  WLS.V,
+  free_values = compiled$default_free_values,
+  compute_se = TRUE
+) {
+  .lavaan_fast_assert_compatible_data(compiled, sample.cov, WLS.V)
+  plan <- .lavaan_fast_native_plan(compiled, plan)
+  fit <- .lavaan_fast_fit_dwls_plan_rust(
+    compiled,
+    plan,
+    sample.cov,
+    WLS.V,
+    free_values = free_values,
+    compute_se = compute_se
+  )
+  .new_lavaan_fast_ram_fit(par_table, sample.cov, WLS.V, compiled, plan, fit)
 }
 
 .fit_lavaan_fast_ram_model <- function(par_table, sample.cov, WLS.V, compute_se = TRUE) {
@@ -2241,8 +2287,14 @@
   }
 
   compiled <- .lavaan_fast_compile_par_table(par_table, observed_names)
-  fit <- .lavaan_fast_fit_dwls_rust(compiled, sample.cov, WLS.V, compute_se = compute_se)
-  .new_lavaan_fast_ram_fit(par_table, sample.cov, WLS.V, compiled, fit)
+  .fit_lavaan_fast_compiled_ram_model(
+    par_table = par_table,
+    compiled = compiled,
+    plan = NULL,
+    sample.cov = sample.cov,
+    WLS.V = WLS.V,
+    compute_se = compute_se
+  )
 }
 
 #' Rust-backed experimental replacement for the supported `lavaan::sem()` slice.
@@ -2431,10 +2483,18 @@ lavaan_rust <- function(sample.cov, WLS.V = NULL, slotOptions = NULL, slotParTab
     methods::is(slotModel, "lavaan_rust_model") &&
       identical(slotModel@model_kind, "ram_dwls_generic") &&
       is.data.frame(slotModel@par_table) &&
+      inherits(slotModel@compiled, "lavaan_fast_compiled") &&
       is.matrix(sample.cov) &&
       is.matrix(WLS.V)
   ) {
-    return(.fit_lavaan_fast_ram_model(slotModel@par_table, sample.cov, WLS.V))
+    return(.fit_lavaan_fast_compiled_ram_model(
+      par_table = slotModel@par_table,
+      compiled = slotModel@compiled,
+      plan = slotModel@plan,
+      sample.cov = sample.cov,
+      WLS.V = WLS.V,
+      free_values = slotModel@free_values
+    ))
   }
 
   stop(

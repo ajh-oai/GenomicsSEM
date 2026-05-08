@@ -539,6 +539,73 @@ test_that("lavaan_fast generic parameter-table path supports direct SNP effect",
   expect_equal(lavaanrust::fitted_rust(refit)$cov, sample_cov, tolerance = 1e-8)
 })
 
+test_that("lavaan_fast generic model reuse keeps a native plan", {
+  sample_cov <- matrix(
+    c(1, 0.25, 0.25, 1.1),
+    nrow = 2L,
+    dimnames = list(c("X", "Y"), c("X", "Y"))
+  )
+  model <- paste(
+    "Y ~ start(.1)*b*X",
+    "X ~~ start(.8)*vx*X",
+    "Y ~~ start(.8)*vy*Y",
+    sep = "\n"
+  )
+  fit <- lavaanrust::sem_rust(
+    model,
+    sample.cov = sample_cov,
+    estimator = "DWLS",
+    WLS.V = diag(3)
+  )
+  refit <- lavaanrust::lavaan_rust(
+    sample.cov = sample_cov,
+    WLS.V = diag(3),
+    slotOptions = fit@Options,
+    slotParTable = fit@ParTable,
+    slotData = fit@Data,
+    slotModel = fit@Model
+  )
+  direct_refit <- lavaanrust:::.fit_lavaan_fast_ram_model(
+    fit@Model@par_table,
+    sample_cov,
+    diag(3)
+  )
+
+  expect_true(inherits(fit@Model@compiled, "lavaan_fast_compiled"))
+  expect_identical(typeof(fit@Model@plan), "externalptr")
+  expect_true(lavaanrust:::ram_dwls_plan_is_valid(fit@Model@plan))
+  expect_identical(refit@Model@plan, fit@Model@plan)
+  expect_equal(lavaanrust::parTable_rust(refit)$est, lavaanrust::parTable_rust(direct_refit)$est)
+  expect_equal(lavaanrust::fitted_rust(refit)$cov, lavaanrust::fitted_rust(direct_refit)$cov)
+})
+
+test_that("lavaan_fast generic model reuse rebuilds serialized native plans", {
+  sample_cov <- matrix(
+    c(1, 0.25, 0.25, 1.1),
+    nrow = 2L,
+    dimnames = list(c("X", "Y"), c("X", "Y"))
+  )
+  fit <- lavaanrust::sem_rust(
+    paste("Y ~ X", "X ~~ X", "Y ~~ Y", sep = "\n"),
+    sample.cov = sample_cov,
+    estimator = "DWLS",
+    WLS.V = diag(3)
+  )
+  restored_model <- unserialize(serialize(fit@Model, NULL))
+  refit <- lavaanrust::lavaan_rust(
+    sample.cov = sample_cov,
+    WLS.V = diag(3),
+    slotOptions = fit@Options,
+    slotParTable = fit@ParTable,
+    slotData = fit@Data,
+    slotModel = restored_model
+  )
+
+  expect_false(lavaanrust:::ram_dwls_plan_is_valid(restored_model@plan))
+  expect_true(lavaanrust:::ram_dwls_plan_is_valid(refit@Model@plan))
+  expect_equal(lavaanrust::fitted_rust(refit)$cov, sample_cov, tolerance = 1e-8)
+})
+
 test_that("lavaan_fast native Jacobian sums shared directed-edge parameters", {
   fixture <- user_gwas_fixture()
   par_table <- fixture$fixed_model

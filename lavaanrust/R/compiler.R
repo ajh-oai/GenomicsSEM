@@ -339,6 +339,70 @@
   list(implied = implied, delta = jacobian)
 }
 
+.lavaan_fast_compile_native_plan <- function(compiled) {
+  compile_ram_dwls_plan(
+    as.integer(compiled$lhs_index),
+    as.integer(compiled$rhs_index),
+    as.integer(compiled$op_code),
+    compiled$native_free_index,
+    compiled$native_fixed_values,
+    compiled$observed_index,
+    compiled$free_row_offsets,
+    compiled$free_row_indices,
+    as.double(compiled$free_lower_bounds),
+    as.double(compiled$free_upper_bounds),
+    as.integer(compiled$n_variables)
+  )
+}
+
+.lavaan_fast_native_plan <- function(compiled, plan = NULL) {
+  if (!is.null(plan) && isTRUE(ram_dwls_plan_is_valid(plan))) {
+    return(plan)
+  }
+
+  .lavaan_fast_compile_native_plan(compiled)
+}
+
+.lavaan_fast_format_dwls_fit <- function(fit, compiled) {
+  fit$implied <- matrix(
+    fit$implied,
+    nrow = length(compiled$observed_names),
+    ncol = length(compiled$observed_names),
+    dimnames = list(compiled$observed_names, compiled$observed_names)
+  )
+  fit$delta <- matrix(
+    fit$delta,
+    nrow = compiled$n_stats,
+    ncol = compiled$n_free,
+    dimnames = list(compiled$stat_names, compiled$free_labels)
+  )
+
+  fit
+}
+
+.lavaan_fast_fit_dwls_plan_rust <- function(
+  compiled,
+  plan,
+  sample_cov,
+  wls_v,
+  free_values = compiled$default_free_values,
+  max_iter = 400L,
+  tol = 1e-12,
+  compute_se = TRUE
+) {
+  fit <- fit_ram_dwls_plan(
+    plan,
+    as.double(sample_cov),
+    as.double(wls_v),
+    as.double(free_values),
+    as.integer(max_iter),
+    tol,
+    isTRUE(compute_se)
+  )
+
+  .lavaan_fast_format_dwls_fit(fit, compiled)
+}
+
 .lavaan_fast_fit_dwls_rust <- function(
   compiled,
   sample_cov,
@@ -367,18 +431,5 @@
     isTRUE(compute_se)
   )
 
-  fit$implied <- matrix(
-    fit$implied,
-    nrow = length(compiled$observed_names),
-    ncol = length(compiled$observed_names),
-    dimnames = list(compiled$observed_names, compiled$observed_names)
-  )
-  fit$delta <- matrix(
-    fit$delta,
-    nrow = compiled$n_stats,
-    ncol = compiled$n_free,
-    dimnames = list(compiled$stat_names, compiled$free_labels)
-  )
-
-  fit
+  .lavaan_fast_format_dwls_fit(fit, compiled)
 }

@@ -30,9 +30,7 @@ enum DwlsWeights {
 impl DwlsWeights {
     fn from_col_major(values: &[f64], n_stats: usize) -> Self {
         let matrix = from_col_major(values, n_stats, n_stats);
-        if (0..n_stats).all(|col| {
-            (0..n_stats).all(|row| row == col || matrix[(row, col)] == 0.0)
-        }) {
+        if (0..n_stats).all(|col| (0..n_stats).all(|row| row == col || matrix[(row, col)] == 0.0)) {
             Self::Diagonal(matrix.diagonal())
         } else {
             Self::Dense(matrix)
@@ -627,7 +625,9 @@ fn implied_ram(
 ) -> std::result::Result<(DMatrix<f64>, DMatrix<f64>, DMatrix<f64>), Error> {
     let identity = DMatrix::<f64>::identity(directed.nrows(), directed.ncols());
     let Some(inverse) = (identity - directed).try_inverse() else {
-        return Err(Error::Other("RAM solve failed because I - A is singular".into()));
+        return Err(Error::Other(
+            "RAM solve failed because I - A is singular".into(),
+        ));
     };
     let observed_inverse = select_rows(&inverse, observed_indices);
     let full_to_observed = &inverse * covariance * observed_inverse.transpose();
@@ -644,7 +644,9 @@ fn implied_ram_observed(
 ) -> std::result::Result<DMatrix<f64>, Error> {
     let identity = DMatrix::<f64>::identity(directed.nrows(), directed.ncols());
     let Some(inverse) = (identity - directed).try_inverse() else {
-        return Err(Error::Other("RAM solve failed because I - A is singular".into()));
+        return Err(Error::Other(
+            "RAM solve failed because I - A is singular".into(),
+        ));
     };
     let mut observed_inverse = DMatrix::<f64>::zeros(observed_indices.len(), inverse.ncols());
 
@@ -755,6 +757,92 @@ fn validate_free_row_groups(
     }
 
     Ok(())
+}
+
+struct RamDwlsPlan {
+    lhs_index: Vec<i32>,
+    rhs_index: Vec<i32>,
+    op_code: Vec<i32>,
+    free_index: Vec<i32>,
+    fixed_values: Vec<f64>,
+    observed_indices: Vec<usize>,
+    free_row_offsets: Vec<i32>,
+    free_row_indices: Vec<i32>,
+    lower_bounds: Vec<f64>,
+    upper_bounds: Vec<f64>,
+    n_variables: usize,
+    n_observed: usize,
+    n_stats: usize,
+}
+
+impl RamDwlsPlan {
+    fn new(
+        lhs_index: Vec<i32>,
+        rhs_index: Vec<i32>,
+        op_code: Vec<i32>,
+        free_index: Vec<i32>,
+        fixed_values: Vec<f64>,
+        observed_index: Vec<i32>,
+        free_row_offsets: Vec<i32>,
+        free_row_indices: Vec<i32>,
+        lower_bounds: Vec<f64>,
+        upper_bounds: Vec<f64>,
+        n_variables: usize,
+    ) -> std::result::Result<Self, Error> {
+        if lower_bounds.len() != upper_bounds.len() {
+            return Err(Error::Other(
+                "lower_bounds and upper_bounds must have the same size".into(),
+            ));
+        }
+
+        if lower_bounds
+            .iter()
+            .zip(upper_bounds.iter())
+            .any(|(lower, upper)| lower > upper)
+        {
+            return Err(Error::Other("lower_bounds exceed upper_bounds".into()));
+        }
+
+        let observed_indices = validate_ram_indices(
+            &lhs_index,
+            &rhs_index,
+            &op_code,
+            &free_index,
+            &fixed_values,
+            &observed_index,
+            n_variables,
+            lower_bounds.len(),
+        )?;
+        validate_free_row_groups(
+            &free_row_offsets,
+            &free_row_indices,
+            &free_index,
+            lower_bounds.len(),
+        )?;
+
+        let n_observed = observed_indices.len();
+        let n_stats = n_observed * (n_observed + 1) / 2;
+
+        Ok(Self {
+            lhs_index,
+            rhs_index,
+            op_code,
+            free_index,
+            fixed_values,
+            observed_indices,
+            free_row_offsets,
+            free_row_indices,
+            lower_bounds,
+            upper_bounds,
+            n_variables,
+            n_observed,
+            n_stats,
+        })
+    }
+
+    fn n_free(&self) -> usize {
+        self.lower_bounds.len()
+    }
 }
 
 fn ram_matrices_from_rows(
@@ -1006,6 +1094,138 @@ fn ram_implied_from_rows(
     let implied = implied_ram_observed(&directed, &covariance, observed_indices)?;
 
     Ok(implied)
+}
+
+fn fit_ram_dwls_with_plan(
+    plan: &RamDwlsPlan,
+    sample_cov_values: Vec<f64>,
+    wls_values: Vec<f64>,
+    initial_free_values: Vec<f64>,
+    max_iter: i32,
+    tol: f64,
+    compute_se: bool,
+) -> std::result::Result<List, Error> {
+    if sample_cov_values.len() != plan.n_observed * plan.n_observed {
+        return Err(Error::Other("sample_cov has the wrong size".into()));
+    }
+
+    if wls_values.len() != plan.n_stats * plan.n_stats {
+        return Err(Error::Other("wls_v has the wrong size".into()));
+    }
+
+    if initial_free_values.len() != plan.n_free() {
+        return Err(Error::Other("free_values has the wrong size".into()));
+    }
+
+    let sample_cov = from_col_major(&sample_cov_values, plan.n_observed, plan.n_observed);
+    let wls_v = DwlsWeights::from_col_major(&wls_values, plan.n_stats);
+    let observed = vech(&sample_cov);
+    let mut params = DVector::from_vec(initial_free_values);
+    for idx in 0..params.len() {
+        params[idx] = params[idx]
+            .max(plan.lower_bounds[idx])
+            .min(plan.upper_bounds[idx]);
+    }
+    let mut damping = 1e-6;
+    let mut converged = false;
+    let mut iterations = 0;
+
+    for iter in 0..max_iter.max(1) {
+        iterations = iter + 1;
+        let params_vec = params.as_slice();
+        let (implied, delta) = ram_surfaces_from_rows(
+            &plan.lhs_index,
+            &plan.rhs_index,
+            &plan.op_code,
+            &plan.free_index,
+            &plan.fixed_values,
+            params_vec,
+            &plan.observed_indices,
+            &plan.free_row_offsets,
+            &plan.free_row_indices,
+            plan.n_variables,
+        )?;
+        let residual = &observed - vech(&implied);
+        let weighted_residual = wls_v.apply_vector(&residual);
+        let (gradient, hessian) = wls_v.normal_equations(&delta, &residual);
+        let mut regularized = hessian.clone();
+
+        for idx in 0..regularized.nrows() {
+            regularized[(idx, idx)] += damping;
+        }
+
+        let Some(step) = solve_damped_normal_equations(&regularized, &gradient) else {
+            damping *= 10.0;
+            continue;
+        };
+
+        let old_objective = 0.5 * residual.dot(&weighted_residual);
+        let mut next_params = &params + &step;
+
+        for idx in 0..next_params.len() {
+            next_params[idx] = next_params[idx]
+                .max(plan.lower_bounds[idx])
+                .min(plan.upper_bounds[idx]);
+        }
+
+        let next_implied = ram_implied_from_rows(
+            &plan.lhs_index,
+            &plan.rhs_index,
+            &plan.op_code,
+            &plan.free_index,
+            &plan.fixed_values,
+            next_params.as_slice(),
+            &plan.observed_indices,
+            plan.n_variables,
+        )?;
+        let next_residual = &observed - vech(&next_implied);
+        let next_objective = wls_v.objective(&next_residual);
+
+        if next_objective <= old_objective {
+            params = next_params;
+            damping = (damping / 3.0).max(1e-12);
+
+            if step.amax() < tol {
+                converged = true;
+                break;
+            }
+        } else {
+            damping *= 10.0;
+        }
+    }
+
+    let (implied, delta) = ram_surfaces_from_rows(
+        &plan.lhs_index,
+        &plan.rhs_index,
+        &plan.op_code,
+        &plan.free_index,
+        &plan.fixed_values,
+        params.as_slice(),
+        &plan.observed_indices,
+        &plan.free_row_offsets,
+        &plan.free_row_indices,
+        plan.n_variables,
+    )?;
+    let residual = &observed - vech(&implied);
+    let naive_se = if compute_se {
+        let bread = invert_bread_matrix(wls_v.weighted_crossprod(&delta))
+            .unwrap_or_else(|| DMatrix::<f64>::zeros(params.len(), params.len()));
+        bread.diagonal().map(|value| value.max(0.0).sqrt())
+    } else {
+        DVector::<f64>::zeros(params.len())
+    };
+    let objective = wls_v.objective(&residual);
+
+    Ok(list!(
+        estimates = params.as_slice().to_vec(),
+        implied = to_col_major(&implied),
+        delta = to_col_major(&delta),
+        naive_se = naive_se.as_slice().to_vec(),
+        objective = objective,
+        srmr = srmr(&sample_cov, &implied),
+        converged = converged,
+        iterations = iterations
+    ))
 }
 
 /// Fit the covariance-only one-factor DWLS slice used by GenomicSEM's
@@ -1586,13 +1806,8 @@ fn fit_user_gwas_fixed_measurement_dwls(
         let next_psi = (psi + step[k]).max(1e-10);
         let next_gamma = gamma + step[k + 1];
         let next_phi = (phi + step[k + 2]).max(1e-10);
-        let next_implied = implied_commonfactor_gwas(
-            &loadings,
-            next_gamma,
-            &next_residuals,
-            next_psi,
-            next_phi,
-        );
+        let next_implied =
+            implied_commonfactor_gwas(&loadings, next_gamma, &next_residuals, next_psi, next_phi);
         let next_residual = &observed - vech(&next_implied);
         let next_objective = wls_v.objective(&next_residual);
 
@@ -1724,10 +1939,115 @@ fn evaluate_ram_surfaces(
     ))
 }
 
+/// Compile immutable generic RAM-model structure into a reusable native plan.
+/// @param lhs_index Parameter-table lhs row indices.
+/// @param rhs_index Parameter-table rhs row indices.
+/// @param op_code Parameter-table operator codes.
+/// @param free_index Free-parameter indices, with `0` for fixed rows.
+/// @param fixed_values Fixed row values, ignored for free rows.
+/// @param observed_index Observed-variable indices in the full RAM system.
+/// @param free_row_offsets Offsets into `free_row_indices` for each free parameter.
+/// @param free_row_indices Flattened 1-based row indices grouped by free parameter.
+/// @param lower_bounds Lower bound for each free parameter.
+/// @param upper_bounds Upper bound for each free parameter.
+/// @param n_variables Number of variables in the full RAM system.
+/// @export
+#[extendr]
+fn compile_ram_dwls_plan(
+    lhs_index: Integers,
+    rhs_index: Integers,
+    op_code: Integers,
+    free_index: Integers,
+    fixed_values: Doubles,
+    observed_index: Integers,
+    free_row_offsets: Integers,
+    free_row_indices: Integers,
+    lower_bounds: Doubles,
+    upper_bounds: Doubles,
+    n_variables: i32,
+) -> std::result::Result<Robj, Error> {
+    if n_variables <= 0 {
+        return Err(Error::Other("n_variables must be positive".into()));
+    }
+
+    let plan = RamDwlsPlan::new(
+        lhs_index.iter().map(|value| value.0).collect::<Vec<_>>(),
+        rhs_index.iter().map(|value| value.0).collect::<Vec<_>>(),
+        op_code.iter().map(|value| value.0).collect::<Vec<_>>(),
+        free_index.iter().map(|value| value.0).collect::<Vec<_>>(),
+        fixed_values.iter().map(|value| value.0).collect::<Vec<_>>(),
+        observed_index
+            .iter()
+            .map(|value| value.0)
+            .collect::<Vec<_>>(),
+        free_row_offsets
+            .iter()
+            .map(|value| value.0)
+            .collect::<Vec<_>>(),
+        free_row_indices
+            .iter()
+            .map(|value| value.0)
+            .collect::<Vec<_>>(),
+        lower_bounds.iter().map(|value| value.0).collect::<Vec<_>>(),
+        upper_bounds.iter().map(|value| value.0).collect::<Vec<_>>(),
+        n_variables as usize,
+    )?;
+
+    Ok(ExternalPtr::new(plan).into())
+}
+
+/// Check whether a generic RAM native plan still points at live Rust state.
+///
+/// External pointers are intentionally not serializable across all R worker
+/// strategies, so the R layer can rebuild them lazily when needed.
+/// @param plan Native plan external pointer.
+/// @export
+#[extendr]
+fn ram_dwls_plan_is_valid(plan: Robj) -> bool {
+    ExternalPtr::<RamDwlsPlan>::try_from(plan)
+        .and_then(|plan| plan.try_addr().map(|_| ()))
+        .is_ok()
+}
+
+/// Fit a generic RAM-model DWLS slice from a reusable native plan.
+///
+/// @param plan Native plan external pointer from `compile_ram_dwls_plan()`.
+/// @param sample_cov Flattened observed covariance matrix.
+/// @param wls_v Flattened DWLS weight matrix.
+/// @param free_values Initial free-parameter values.
+/// @param max_iter Maximum optimizer iterations.
+/// @param tol Convergence tolerance.
+/// @param compute_se Whether to compute naive standard errors from the final bread matrix.
+/// @export
+#[extendr]
+fn fit_ram_dwls_plan(
+    plan: Robj,
+    sample_cov: Doubles,
+    wls_v: Doubles,
+    free_values: Doubles,
+    max_iter: i32,
+    tol: f64,
+    compute_se: bool,
+) -> std::result::Result<List, Error> {
+    let plan: ExternalPtr<RamDwlsPlan> = plan.try_into()?;
+    let plan = plan.try_addr()?;
+
+    fit_ram_dwls_with_plan(
+        plan,
+        sample_cov.iter().map(|value| value.0).collect::<Vec<_>>(),
+        wls_v.iter().map(|value| value.0).collect::<Vec<_>>(),
+        free_values.iter().map(|value| value.0).collect::<Vec<_>>(),
+        max_iter,
+        tol,
+        compute_se,
+    )
+}
+
 /// Fit a generic RAM-model DWLS slice from compiled row data.
 ///
-/// This is the generic optimizer counterpart to `evaluate_ram_surfaces()`.
-/// Free diagonal covariance parameters are constrained to remain positive.
+/// This compatibility entry point rebuilds a native plan for one-off callers.
+/// Repeated fits should prefer `compile_ram_dwls_plan()` plus
+/// `fit_ram_dwls_plan()`.
 /// @param sample_cov Flattened observed covariance matrix.
 /// @param wls_v Flattened DWLS weight matrix.
 /// @param lhs_index Parameter-table lhs row indices.
@@ -1770,177 +2090,38 @@ fn fit_ram_dwls(
         return Err(Error::Other("n_variables must be positive".into()));
     }
 
-    let n_variables = n_variables as usize;
-    let lhs_index = lhs_index.iter().map(|value| value.0).collect::<Vec<_>>();
-    let rhs_index = rhs_index.iter().map(|value| value.0).collect::<Vec<_>>();
-    let op_code = op_code.iter().map(|value| value.0).collect::<Vec<_>>();
-    let free_index = free_index.iter().map(|value| value.0).collect::<Vec<_>>();
-    let fixed_values = fixed_values.iter().map(|value| value.0).collect::<Vec<_>>();
-    let initial_free_values = free_values.iter().map(|value| value.0).collect::<Vec<_>>();
-    let observed_index = observed_index
-        .iter()
-        .map(|value| value.0)
-        .collect::<Vec<_>>();
-    let free_row_offsets = free_row_offsets
-        .iter()
-        .map(|value| value.0)
-        .collect::<Vec<_>>();
-    let free_row_indices = free_row_indices
-        .iter()
-        .map(|value| value.0)
-        .collect::<Vec<_>>();
-    let lower_bounds = lower_bounds.iter().map(|value| value.0).collect::<Vec<_>>();
-    let upper_bounds = upper_bounds.iter().map(|value| value.0).collect::<Vec<_>>();
-    let observed_indices = validate_ram_indices(
-        &lhs_index,
-        &rhs_index,
-        &op_code,
-        &free_index,
-        &fixed_values,
-        &observed_index,
-        n_variables,
-        initial_free_values.len(),
+    let plan = RamDwlsPlan::new(
+        lhs_index.iter().map(|value| value.0).collect::<Vec<_>>(),
+        rhs_index.iter().map(|value| value.0).collect::<Vec<_>>(),
+        op_code.iter().map(|value| value.0).collect::<Vec<_>>(),
+        free_index.iter().map(|value| value.0).collect::<Vec<_>>(),
+        fixed_values.iter().map(|value| value.0).collect::<Vec<_>>(),
+        observed_index
+            .iter()
+            .map(|value| value.0)
+            .collect::<Vec<_>>(),
+        free_row_offsets
+            .iter()
+            .map(|value| value.0)
+            .collect::<Vec<_>>(),
+        free_row_indices
+            .iter()
+            .map(|value| value.0)
+            .collect::<Vec<_>>(),
+        lower_bounds.iter().map(|value| value.0).collect::<Vec<_>>(),
+        upper_bounds.iter().map(|value| value.0).collect::<Vec<_>>(),
+        n_variables as usize,
     )?;
-    validate_free_row_groups(
-        &free_row_offsets,
-        &free_row_indices,
-        &free_index,
-        initial_free_values.len(),
-    )?;
-    if lower_bounds.len() != initial_free_values.len() {
-        return Err(Error::Other("lower_bounds has the wrong size".into()));
-    }
-    if upper_bounds.len() != initial_free_values.len() {
-        return Err(Error::Other("upper_bounds has the wrong size".into()));
-    }
-    if lower_bounds
-        .iter()
-        .zip(upper_bounds.iter())
-        .any(|(lower, upper)| lower > upper)
-    {
-        return Err(Error::Other("lower_bounds exceed upper_bounds".into()));
-    }
 
-    let n_observed = observed_indices.len();
-    let n_stats = n_observed * (n_observed + 1) / 2;
-    let sample_cov_values = sample_cov.iter().map(|value| value.0).collect::<Vec<_>>();
-    let wls_values = wls_v.iter().map(|value| value.0).collect::<Vec<_>>();
-
-    if sample_cov_values.len() != n_observed * n_observed {
-        return Err(Error::Other("sample_cov has the wrong size".into()));
-    }
-
-    if wls_values.len() != n_stats * n_stats {
-        return Err(Error::Other("wls_v has the wrong size".into()));
-    }
-
-    let sample_cov = from_col_major(&sample_cov_values, n_observed, n_observed);
-    let wls_v = DwlsWeights::from_col_major(&wls_values, n_stats);
-    let observed = vech(&sample_cov);
-    let mut params = DVector::from_vec(initial_free_values);
-    for idx in 0..params.len() {
-        params[idx] = params[idx].max(lower_bounds[idx]).min(upper_bounds[idx]);
-    }
-    let mut damping = 1e-6;
-    let mut converged = false;
-    let mut iterations = 0;
-
-    for iter in 0..max_iter.max(1) {
-        iterations = iter + 1;
-        let params_vec = params.as_slice();
-        let (implied, delta) = ram_surfaces_from_rows(
-            &lhs_index,
-            &rhs_index,
-            &op_code,
-            &free_index,
-            &fixed_values,
-            params_vec,
-            &observed_indices,
-            &free_row_offsets,
-            &free_row_indices,
-            n_variables,
-        )?;
-        let residual = &observed - vech(&implied);
-        let weighted_residual = wls_v.apply_vector(&residual);
-        let (gradient, hessian) = wls_v.normal_equations(&delta, &residual);
-        let mut regularized = hessian.clone();
-
-        for idx in 0..regularized.nrows() {
-            regularized[(idx, idx)] += damping;
-        }
-
-        let Some(step) = solve_damped_normal_equations(&regularized, &gradient) else {
-            damping *= 10.0;
-            continue;
-        };
-
-        let old_objective = 0.5 * residual.dot(&weighted_residual);
-        let mut next_params = &params + &step;
-
-        for idx in 0..next_params.len() {
-            next_params[idx] = next_params[idx]
-                .max(lower_bounds[idx])
-                .min(upper_bounds[idx]);
-        }
-
-        let next_implied = ram_implied_from_rows(
-            &lhs_index,
-            &rhs_index,
-            &op_code,
-            &free_index,
-            &fixed_values,
-            next_params.as_slice(),
-            &observed_indices,
-            n_variables,
-        )?;
-        let next_residual = &observed - vech(&next_implied);
-        let next_objective = wls_v.objective(&next_residual);
-
-        if next_objective <= old_objective {
-            params = next_params;
-            damping = (damping / 3.0).max(1e-12);
-
-            if step.amax() < tol {
-                converged = true;
-                break;
-            }
-        } else {
-            damping *= 10.0;
-        }
-    }
-
-    let (implied, delta) = ram_surfaces_from_rows(
-        &lhs_index,
-        &rhs_index,
-        &op_code,
-        &free_index,
-        &fixed_values,
-        params.as_slice(),
-        &observed_indices,
-        &free_row_offsets,
-        &free_row_indices,
-        n_variables,
-    )?;
-    let residual = &observed - vech(&implied);
-    let naive_se = if compute_se {
-        let bread = invert_bread_matrix(wls_v.weighted_crossprod(&delta))
-            .unwrap_or_else(|| DMatrix::<f64>::zeros(params.len(), params.len()));
-        bread.diagonal().map(|value| value.max(0.0).sqrt())
-    } else {
-        DVector::<f64>::zeros(params.len())
-    };
-    let objective = wls_v.objective(&residual);
-
-    Ok(list!(
-        estimates = params.as_slice().to_vec(),
-        implied = to_col_major(&implied),
-        delta = to_col_major(&delta),
-        naive_se = naive_se.as_slice().to_vec(),
-        objective = objective,
-        srmr = srmr(&sample_cov, &implied),
-        converged = converged,
-        iterations = iterations
-    ))
+    fit_ram_dwls_with_plan(
+        &plan,
+        sample_cov.iter().map(|value| value.0).collect::<Vec<_>>(),
+        wls_v.iter().map(|value| value.0).collect::<Vec<_>>(),
+        free_values.iter().map(|value| value.0).collect::<Vec<_>>(),
+        max_iter,
+        tol,
+        compute_se,
+    )
 }
 
 extendr_module! {
@@ -1951,5 +2132,8 @@ extendr_module! {
     fn fit_commonfactor_gwas_q_dwls;
     fn fit_user_gwas_fixed_measurement_dwls;
     fn evaluate_ram_surfaces;
+    fn compile_ram_dwls_plan;
+    fn ram_dwls_plan_is_valid;
+    fn fit_ram_dwls_plan;
     fn fit_ram_dwls;
 }

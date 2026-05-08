@@ -90,10 +90,46 @@ fit_user_gwas_fixed_measurement_dwls <- function(sample_cov, wls_v, loadings, re
 #' @export
 evaluate_ram_surfaces <- function(lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, free_row_offsets, free_row_indices, n_variables) .Call(wrap__evaluate_ram_surfaces, lhs_index, rhs_index, op_code, free_index, fixed_values, free_values, observed_index, free_row_offsets, free_row_indices, n_variables)
 
+#' Compile immutable generic RAM-model structure into a reusable native plan.
+#' @param lhs_index Parameter-table lhs row indices.
+#' @param rhs_index Parameter-table rhs row indices.
+#' @param op_code Parameter-table operator codes.
+#' @param free_index Free-parameter indices, with `0` for fixed rows.
+#' @param fixed_values Fixed row values, ignored for free rows.
+#' @param observed_index Observed-variable indices in the full RAM system.
+#' @param free_row_offsets Offsets into `free_row_indices` for each free parameter.
+#' @param free_row_indices Flattened 1-based row indices grouped by free parameter.
+#' @param lower_bounds Lower bound for each free parameter.
+#' @param upper_bounds Upper bound for each free parameter.
+#' @param n_variables Number of variables in the full RAM system.
+#' @export
+compile_ram_dwls_plan <- function(lhs_index, rhs_index, op_code, free_index, fixed_values, observed_index, free_row_offsets, free_row_indices, lower_bounds, upper_bounds, n_variables) .Call(wrap__compile_ram_dwls_plan, lhs_index, rhs_index, op_code, free_index, fixed_values, observed_index, free_row_offsets, free_row_indices, lower_bounds, upper_bounds, n_variables)
+
+#' Check whether a generic RAM native plan still points at live Rust state.
+#'
+#' External pointers are intentionally not serializable across all R worker
+#' strategies, so the R layer can rebuild them lazily when needed.
+#' @param plan Native plan external pointer.
+#' @export
+ram_dwls_plan_is_valid <- function(plan) .Call(wrap__ram_dwls_plan_is_valid, plan)
+
+#' Fit a generic RAM-model DWLS slice from a reusable native plan.
+#'
+#' @param plan Native plan external pointer from `compile_ram_dwls_plan()`.
+#' @param sample_cov Flattened observed covariance matrix.
+#' @param wls_v Flattened DWLS weight matrix.
+#' @param free_values Initial free-parameter values.
+#' @param max_iter Maximum optimizer iterations.
+#' @param tol Convergence tolerance.
+#' @param compute_se Whether to compute naive standard errors from the final bread matrix.
+#' @export
+fit_ram_dwls_plan <- function(plan, sample_cov, wls_v, free_values, max_iter, tol, compute_se) .Call(wrap__fit_ram_dwls_plan, plan, sample_cov, wls_v, free_values, max_iter, tol, compute_se)
+
 #' Fit a generic RAM-model DWLS slice from compiled row data.
 #'
-#' This is the generic optimizer counterpart to `evaluate_ram_surfaces()`.
-#' Free diagonal covariance parameters are constrained to remain positive.
+#' This compatibility entry point rebuilds a native plan for one-off callers.
+#' Repeated fits should prefer `compile_ram_dwls_plan()` plus
+#' `fit_ram_dwls_plan()`.
 #' @param sample_cov Flattened observed covariance matrix.
 #' @param wls_v Flattened DWLS weight matrix.
 #' @param lhs_index Parameter-table lhs row indices.

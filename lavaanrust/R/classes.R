@@ -30,6 +30,8 @@ methods::setClass(
   slots = c(
     model_kind = "character",
     par_table = "data.frame",
+    compiled = "ANY",
+    plan = "ANY",
     free_values = "numeric",
     def.function = "function"
   )
