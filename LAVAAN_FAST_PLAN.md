@@ -66,8 +66,11 @@ the compiler seam before moving solvers onto it.
      in Rust fitters
    - done: exploit sparse rank-one RAM Jacobian structure so exact-zero support
      entries are not revisited during lower-triangle accumulation
-   - next: decide whether a reusable native compiled plan is worth the extra
-     lifecycle complexity
+   - done: keep a reusable native RAM plan on generic fit objects, while
+     retaining a serializable compiled R fallback for worker processes that
+     cannot preserve external pointers
+   - next: decide whether repeated-fit batching is worth moving the `_rust()`
+     wrappers away from the current one-SNP-at-a-time GenomicSEM control flow
 4. Keep the generic optimizer simple and measured:
    - done: add an implied-only line-search path so candidate steps do not rebuild
      Jacobians they never consume

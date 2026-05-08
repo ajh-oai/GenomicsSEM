@@ -1395,3 +1395,57 @@ scaling curve to flatten further.
   - `Rscript tools/bench_lavaan_rust_matched_scaling.R`
   - result: `119` lavaanrust tests and `46` wrapper tests passing; matched
     benchmark rows still agree with lavaan to at most `2.53e-07`
+
+## 2026-05-08 00:22 PDT
+
+### Native plan reuse for repeated generic fits
+
+The generic slot-reuse path was still reconstructing the whole compiled RAM
+representation from `slotModel@par_table` on every repeated fit. That was
+unnecessary work in GWAS-style loops where the model structure is fixed and only
+the observed moments change.
+
+Changes made:
+
+- added a reusable native `RamDwlsPlan` external pointer that keeps immutable
+  RAM row structure, support groups, bounds, and dimensions in Rust
+- kept free starting values outside the plan so repeated fits preserve the
+  existing base-model semantics
+- stored both the serializable R compiled object and the native plan on generic
+  `lavaan_rust_model` objects
+- rebuilt the native plan lazily if an R worker serialization step invalidates
+  the external pointer
+- added regression coverage for ordinary plan reuse and for the serialized-plan
+  rebuild path
+- added `tools/bench_lavaan_rust_plan_reuse.R` to compare the old repeated
+  recompile path against native plan reuse without changing fit-object assembly
+
+Remote panda/flex 16-CPU microbenchmark, same generic model and same
+fit-object reconstruction on both arms:
+
+| Repeated fits | recompile each fit | native plan reuse | Speedup |
+| ---: | ---: | ---: | ---: |
+| `10` | `0.016 s` | `0.008 s` | `2.00x` |
+| `100` | `0.157 s` | `0.083 s` | `1.89x` |
+| `1000` | `1.571 s` | `0.818 s` | `1.92x` |
+
+The maximum estimate difference in every measured row was exactly `0`. This is a
+useful standalone repeated-fit improvement, but it does not change the larger
+wrapper shape: `userGWAS_rust()` and `commonfactorGWAS_rust()` still make one
+backend call and rebuild one R fit object per SNP. A future batched worker path
+would be the next larger orchestration win if we decide to move beyond strict
+one-SNP-at-a-time reuse.
+
+### Validation
+
+- Local:
+  - `cargo test --manifest-path lavaanrust/src/rust/Cargo.toml`
+  - `Rscript -e 'pkgload::load_all("lavaanrust", quiet=TRUE, recompile=TRUE); testthat::test_dir("lavaanrust/tests/testthat"); pkgload::load_all(quiet=TRUE); testthat::test_dir("tests/testthat")'`
+  - result: `6` Rust tests, `128` lavaanrust tests, and `46` wrapper tests
+    passing
+- Remote panda/flex 16-CPU pod:
+  - `R CMD INSTALL lavaanrust`
+  - `Rscript -e 'library(GenomicSEM); testthat::test_dir("lavaanrust/tests/testthat"); testthat::test_dir("tests/testthat")'`
+  - `Rscript tools/bench_lavaan_rust_plan_reuse.R counts=1,10,100,1000 repeats=5`
+  - result: `128` lavaanrust tests and `46` wrapper tests passing; repeated-fit
+    plan reuse stayed estimate-identical to recompiling
