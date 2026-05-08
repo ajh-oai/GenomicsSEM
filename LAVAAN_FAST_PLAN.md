@@ -69,7 +69,10 @@ the compiler seam before moving solvers onto it.
    - done: keep a reusable native RAM plan on generic fit objects, while
      retaining a serializable compiled R fallback for worker processes that
      cannot preserve external pointers
-   - next: decide whether repeated-fit batching is worth moving the `_rust()`
+   - done: benchmark repeated generic fits through `10,000` iterations; native
+     plan reuse is useful, but the remaining one-fit-at-a-time R wrapper path is
+     now much larger than the native fitter itself
+   - next: add repeated-fit batching if we are willing to move the `_rust()`
      wrappers away from the current one-SNP-at-a-time GenomicSEM control flow
 4. Keep the generic optimizer simple and measured:
    - done: add an implied-only line-search path so candidate steps do not rebuild

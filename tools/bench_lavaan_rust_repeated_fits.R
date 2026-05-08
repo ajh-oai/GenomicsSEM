@@ -135,6 +135,15 @@ cov_diff <- function(old_fit, rust_fit) {
 
 linear_summary <- function(summary) {
   counts <- summary$n_fit >= 10L
+  if (sum(counts) < 2L) {
+    return(data.frame(
+      backend = c("lavaan", "lavaanrust_recompiled", "lavaanrust_plan_reuse"),
+      intercept_ms = NA_real_,
+      slope_ms_per_fit = NA_real_,
+      stringsAsFactors = FALSE
+    ))
+  }
+
   data.frame(
     backend = c("lavaan", "lavaanrust_recompiled", "lavaanrust_plan_reuse"),
     intercept_ms = c(

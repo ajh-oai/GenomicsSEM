@@ -1449,3 +1449,61 @@ one-SNP-at-a-time reuse.
   - `Rscript tools/bench_lavaan_rust_plan_reuse.R counts=1,10,100,1000 repeats=5`
   - result: `128` lavaanrust tests and `46` wrapper tests passing; repeated-fit
     plan reuse stayed estimate-identical to recompiling
+
+## 2026-05-08 00:36 PDT
+
+### Repeated-fit scaling across lavaan and lavaanrust
+
+Added `tools/bench_lavaan_rust_repeated_fits.R` to measure the repeated-fit
+workload directly instead of inferring from single-fit scaling. The benchmark
+uses the same flexible one-factor GWAS-style model family across all arms,
+perturbs only the SNP-side observed moments between fits, and compares:
+
+1. `lavaan` slot reuse, mirroring the old GenomicSEM loop
+2. the pre-plan-reuse generic lavaanrust behavior, simulated by forcing the
+   current build through `.fit_lavaan_fast_ram_model()` on every fit
+3. the new native-plan reuse path through `lavaan_rust()`
+
+Remote panda/flex 16-CPU result:
+
+| Repeated fits | `lavaan` | lavaanrust recompile | lavaanrust plan reuse | Plan reuse vs lavaan | Plan reuse vs recompile |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| `10` | `0.329 s` | `0.018 s` | `0.011 s` | `29.91x` | `1.64x` |
+| `100` | `3.623 s` | `0.179 s` | `0.105 s` | `34.50x` | `1.70x` |
+| `1000` | `36.935 s` | `1.797 s` | `1.036 s` | `35.65x` | `1.73x` |
+| `10000` | `370.877 s` | `18.866 s` | `10.643 s` | `34.85x` | `1.77x` |
+
+The `1` through `1000` rows were measured with `3` repeats and summarized by
+the median. The `10000` row is one direct measurement because the lavaan arm
+alone takes more than six minutes there; it agrees closely with the linear
+trend from the smaller repeated rows. Median slope over the `10` through `1000`
+rows was:
+
+| Backend | slope |
+| --- | ---: |
+| `lavaan` | `36.991 ms / fit` |
+| lavaanrust recompile | `1.797 ms / fit` |
+| lavaanrust plan reuse | `1.035 ms / fit` |
+
+Correctness stayed tight throughout:
+
+- maximum fitted-covariance difference versus lavaan was at most
+  `1.073222e-09`
+- the recompiling and plan-reuse lavaanrust arms had exactly identical
+  estimates in every reported row
+
+The repeated-fit benchmark answers the next optimization question cleanly.
+Native plan reuse removes a real chunk of repeated setup work, but it is no
+longer the dominant cost. A follow-up 10,000-fit diagnostic on the same pod
+measured:
+
+| Path | `10000` fits |
+| --- | ---: |
+| native plan fitter only | `0.677 s` |
+| full plan-reuse `lavaan_rust()` path | `10.593 s` |
+
+So after plan reuse, the one-fit-at-a-time R wrapper / fit-object reconstruction
+path is about `15.65x` larger than the native fitter itself. That makes batching
+the repeated-fit wrapper path, rather than more native fitter micro-tuning, the
+next high-impact optimization if we are willing to diverge from strict
+one-SNP-at-a-time GenomicSEM control flow.
