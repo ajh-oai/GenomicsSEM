@@ -606,6 +606,67 @@ test_that("lavaan_fast generic model reuse rebuilds serialized native plans", {
   expect_equal(lavaanrust::fitted_rust(refit)$cov, sample_cov, tolerance = 1e-8)
 })
 
+test_that("lavaan_fast generic model reuse rejects changed structural rows", {
+  sample_cov <- matrix(
+    c(1, 0.25, 0.25, 1.1),
+    nrow = 2L,
+    dimnames = list(c("X", "Y"), c("X", "Y"))
+  )
+  fit <- lavaanrust::sem_rust(
+    paste("Y ~ X", "X ~~ X", "Y ~~ Y", sep = "\n"),
+    sample.cov = sample_cov,
+    estimator = "DWLS",
+    WLS.V = diag(3)
+  )
+  mutated_model <- fit@Model
+  mutated_model@par_table$rhs[[1L]] <- "Z"
+
+  expect_error(
+    lavaanrust::lavaan_rust(
+      sample.cov = sample_cov,
+      WLS.V = diag(3),
+      slotOptions = fit@Options,
+      slotParTable = fit@ParTable,
+      slotData = fit@Data,
+      slotModel = mutated_model
+    ),
+    "cached model structure changed after compilation"
+  )
+})
+
+test_that("lavaan_fast generic model reuse rejects changed fixed structural values", {
+  sample_cov <- matrix(
+    c(1, 0.25, 0.25, 1.1),
+    nrow = 2L,
+    dimnames = list(c("X", "Y"), c("X", "Y"))
+  )
+  fit <- lavaanrust::sem_rust(
+    paste("Y ~ X", "X ~~ 1*X", "Y ~~ Y", sep = "\n"),
+    sample.cov = sample_cov,
+    estimator = "DWLS",
+    WLS.V = diag(3)
+  )
+  mutated_model <- fit@Model
+  fixed_row <- which(
+    mutated_model@par_table$lhs == "X" &
+      mutated_model@par_table$op == "~~" &
+      mutated_model@par_table$rhs == "X"
+  )
+  mutated_model@par_table$est[[fixed_row]] <- 2
+
+  expect_error(
+    lavaanrust::lavaan_rust(
+      sample.cov = sample_cov,
+      WLS.V = diag(3),
+      slotOptions = fit@Options,
+      slotParTable = fit@ParTable,
+      slotData = fit@Data,
+      slotModel = mutated_model
+    ),
+    "cached model structure changed after compilation"
+  )
+})
+
 test_that("lavaan_fast native Jacobian sums shared directed-edge parameters", {
   fixture <- user_gwas_fixture()
   par_table <- fixture$fixed_model

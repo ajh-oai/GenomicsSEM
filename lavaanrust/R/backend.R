@@ -2263,6 +2263,16 @@
   free_values = compiled$default_free_values,
   compute_se = TRUE
 ) {
+  if (!.lavaan_fast_compiled_model_is_current(par_table, compiled)) {
+    stop(
+      paste(
+        "lavaan_fast cached model structure changed after compilation;",
+        "refit with sem_rust() instead of mutating cached model internals."
+      ),
+      call. = FALSE
+    )
+  }
+
   .lavaan_fast_assert_compatible_data(compiled, sample.cov, WLS.V)
   plan <- .lavaan_fast_native_plan(compiled, plan)
   fit <- .lavaan_fast_fit_dwls_plan_rust(

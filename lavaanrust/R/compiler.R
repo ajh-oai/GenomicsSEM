@@ -17,6 +17,81 @@
   ))
 }
 
+.lavaan_fast_optional_numeric_column <- function(par_table, column) {
+  if (column %in% names(par_table)) {
+    as.double(par_table[[column]])
+  } else {
+    rep(NA_real_, nrow(par_table))
+  }
+}
+
+.lavaan_fast_compiled_model_is_current <- function(par_table, compiled) {
+  if (!inherits(compiled, "lavaan_fast_compiled")) {
+    return(FALSE)
+  }
+
+  par_table <- .lavaan_fast_normalize_free_ids(par_table)
+  structural_row_indices <- as.integer(which(par_table$op %in% c("=~", "~", "~~")))
+  if (!identical(structural_row_indices, compiled$structural_row_indices)) {
+    return(FALSE)
+  }
+
+  structural_par_table <- par_table[structural_row_indices, , drop = FALSE]
+  compiled_par_table <- compiled$par_table
+  if (nrow(structural_par_table) != nrow(compiled_par_table)) {
+    return(FALSE)
+  }
+
+  structural_shape_matches <- identical(
+    as.character(structural_par_table$lhs),
+    as.character(compiled_par_table$lhs)
+  ) &&
+    identical(
+      as.character(structural_par_table$op),
+      as.character(compiled_par_table$op)
+    ) &&
+    identical(
+      as.character(structural_par_table$rhs),
+      as.character(compiled_par_table$rhs)
+    ) &&
+    identical(
+      as.integer(structural_par_table$free),
+      as.integer(compiled_par_table$free)
+    )
+  if (!structural_shape_matches) {
+    return(FALSE)
+  }
+
+  if (
+    !identical(
+      .lavaan_fast_optional_numeric_column(structural_par_table, "lower"),
+      .lavaan_fast_optional_numeric_column(compiled_par_table, "lower")
+    ) ||
+      !identical(
+        .lavaan_fast_optional_numeric_column(structural_par_table, "upper"),
+        .lavaan_fast_optional_numeric_column(compiled_par_table, "upper")
+      )
+  ) {
+    return(FALSE)
+  }
+
+  fixed_rows <- which(is.na(compiled$free_index))
+  if (!length(fixed_rows)) {
+    return(TRUE)
+  }
+
+  fixed_values <- vapply(
+    fixed_rows,
+    function(row_idx) .lavaan_fast_row_value(structural_par_table, row_idx),
+    numeric(1L)
+  )
+
+  identical(
+    as.double(fixed_values),
+    as.double(compiled$fixed_values[fixed_rows])
+  )
+}
+
 .lavaan_fast_compile_par_table <- function(par_table, observed_names) {
   if (!is.data.frame(par_table)) {
     stop("lavaan_fast compiler expects a data.frame parameter table.", call. = FALSE)
